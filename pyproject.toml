@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "financial-planner"
+version = "0.1.0"
+description = "A financial planning tool to simulate investment scenarios, one-time costs, and retirement planning with interactive charts."
+authors = ["Your Name <your.email@example.com>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+streamlit = "*"
+matplotlib = "*"
+plotly = "*"
+
+[tool.poetry.scripts]
+financial-planner = "financial_planner.gui_app:main"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
