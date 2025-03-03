@@ -466,6 +466,9 @@ def run_simulation(
 
             # 3) Retirement Income and Expenses
             if is_retirement:
+                # Calculate inflation-adjusted annual budget
+                inflation_adjusted_budget = annual_budget * (1 + inflation_rate) ** (year - years_to_retirement)
+                
                 # Add social security income
                 ss_income = annual_ss_benefit * (1 + inflation_rate) ** (year - years_to_retirement)
                 current_stock_value += ss_income
@@ -483,7 +486,7 @@ def run_simulation(
 
             # 4) Stocks (accum or retire)
             stock_contribution = stock_annual_contribution if not is_retirement else 0
-            stock_withdrawal = withdrawal if is_retirement else 0
+            stock_withdrawal = inflation_adjusted_budget if is_retirement else 0  # Use inflation-adjusted budget
             
             current_stock_value, actual_withdrawal = simulate_stock(
                 current_stock_value,
@@ -494,7 +497,7 @@ def run_simulation(
                 dividend_yield,
                 dividend_tax_rate,
                 withdrawal=stock_withdrawal,
-                inflation_adjusted_withdrawal=True,
+                inflation_adjusted_withdrawal=False,  # We're already adjusting for inflation
                 current_year=year,
                 inflation_rate=inflation_rate
             )
@@ -1089,8 +1092,11 @@ def main():
         cash_flow_data = pd.DataFrame({
             'Year': summary_df['Year'],
             'Phase': summary_df['Phase'],
-            'Amount': [stock_annual_contribution if year < years_to_retirement else -annual_withdrawal_stocks 
-                      for year in range(total_years)]
+            'Amount': [
+                stock_annual_contribution if year < years_to_retirement 
+                else -(annual_budget * (1 + inflation_rate) ** (year - years_to_retirement))
+                for year in range(total_years)
+            ]
         })
         
         fig_cash_flow = px.bar(
@@ -1098,10 +1104,23 @@ def main():
             x='Year',
             y='Amount',
             color='Phase',
-            title='Annual Contributions vs Withdrawals',
+            title='Annual Contributions vs Withdrawals (Inflation Adjusted)',
             labels={'Amount': 'Cash Flow ($)'}
         )
         fig_cash_flow.add_hline(y=0, line_color='black', line_width=1)
+        
+        # Add annotations showing initial and final withdrawal amounts
+        if years_in_retirement > 0:
+            initial_withdrawal = annual_budget
+            final_withdrawal = annual_budget * (1 + inflation_rate) ** years_in_retirement
+            
+            st.info(f"""
+            **Withdrawal Amounts (Today's vs Final Year):**
+            - Initial Annual Withdrawal: ${initial_withdrawal:,.2f}
+            - Final Year Withdrawal: ${final_withdrawal:,.2f}
+            - Total Increase: {((final_withdrawal/initial_withdrawal - 1) * 100):.1f}%
+            """)
+            
         st.plotly_chart(fig_cash_flow, use_container_width=True)
 
         # Detailed Rental Plots
