@@ -10,6 +10,7 @@ python = "^3.11"
 streamlit = "*"
 matplotlib = "*"
 plotly = "*"
+kaleido = "0.2.1"
 
 [tool.poetry.scripts]
 financial-planner = "financial_planner.gui_app:main"

@@ -3,6 +3,10 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 from datetime import date
+from jinja2 import Template
+import base64
+from io import BytesIO
+from plotly import graph_objects as go
 
 # -----------------------------------------------
 # Mortgage Payment Formula
@@ -607,6 +611,235 @@ def run_simulation(
         "failure_rate": failure_rate
     }
 
+# Add this helper function at the top with other functions
+def prepare_figure_for_report(fig, title):
+    """
+    Prepare a Plotly figure for the HTML report by ensuring proper colors and formatting.
+    """
+    # Define a consistent color palette
+    colors = px.colors.qualitative.Set3
+
+    # Update general layout
+    fig.update_layout(
+        title_x=0.5,
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        title={'font': {'size': 24}},
+        showlegend=True
+    )
+
+    # Update colors based on plot type
+    if isinstance(fig, go.Figure):  # For pie charts and other go.Figure objects
+        if 'pie' in [trace.type for trace in fig.data]:
+            fig.update_traces(
+                marker=dict(colors=colors),
+                textinfo='label+percent',
+                textposition='inside'
+            )
+    else:  # For px figures (line, area, bar charts)
+        if hasattr(fig, 'data'):
+            for i, trace in enumerate(fig.data):
+                trace.update(marker_color=colors[i % len(colors)])
+
+    return fig
+
+# Add this function to generate the HTML report
+def generate_html_report(results, params, figures, monthly_expenses, ss_analysis=None, tax_analysis=None, allocation_analysis=None):
+    """
+    Generate an HTML report from simulation results and figures.
+    """
+    html_template = """
+    <html>
+    <head>
+        <title>Retirement Portfolio Analysis Report</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 40px; }
+            .header { text-align: center; margin-bottom: 30px; }
+            .section { margin: 20px 0; padding: 20px; border: 1px solid #eee; border-radius: 5px; }
+            .metric { margin: 10px 0; }
+            .plot { margin: 20px 0; text-align: center; }
+            .parameters { margin: 20px 0; }
+            .alert { padding: 15px; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; }
+            .info { padding: 15px; background-color: #d1ecf1; border: 1px solid #bee5eb; border-radius: 4px; }
+            table { border-collapse: collapse; width: 100%; margin: 20px 0; }
+            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; }
+            .plot img {
+                max-width: 100%;
+                height: auto;
+                margin: 20px 0;
+                border: 1px solid #eee;
+                border-radius: 5px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
+            .plot p {
+                font-size: 1.2em;
+                font-weight: bold;
+                color: #333;
+                margin: 10px 0;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>Retirement Portfolio Analysis Report</h1>
+            <p>Generated on {{ params.generation_date }}</p>
+        </div>
+
+        <div class="section">
+            <h2>Executive Summary</h2>
+            <div class="alert">Portfolio Failure Rate: {{ params.failure_rate }}%</div>
+            <p>A failure rate above 5% suggests the plan may be too risky.</p>
+            
+            <h3>Key Metrics</h3>
+            <div class="metric">Initial Portfolio: ${{ '{:,.2f}'.format(params.initial_portfolio) }}</div>
+            <div class="metric">Annual Contribution: ${{ '{:,.2f}'.format(params.annual_contribution) }}</div>
+            <div class="metric">Initial Withdrawal: ${{ '{:,.2f}'.format(params.initial_withdrawal) }}</div>
+            <div class="metric">Final Year Withdrawal: ${{ '{:,.2f}'.format(params.final_withdrawal) }}</div>
+        </div>
+
+        <div class="section">
+            <h2>Timeline</h2>
+            <div class="metric">Current Age: {{ params.current_age }}</div>
+            <div class="metric">Retirement Age: {{ params.retirement_age }}</div>
+            <div class="metric">Years to Retirement: {{ params.years_to_retirement }}</div>
+            <div class="metric">Years in Retirement: {{ params.years_in_retirement }}</div>
+        </div>
+
+        <div class="section">
+            <h2>Monthly Budget Breakdown</h2>
+            <table>
+                <tr><th>Category</th><th>Amount</th></tr>
+                {% for category, amount in params.monthly_expenses.items() %}
+                <tr><td>{{ category }}</td><td>${{ '{:,.2f}'.format(amount) }}</td></tr>
+                {% endfor %}
+                <tr><th>Total Monthly</th><th>${{ '{:,.2f}'.format(params.total_monthly) }}</th></tr>
+                <tr><th>Total Annual</th><th>${{ '{:,.2f}'.format(params.total_monthly * 12) }}</th></tr>
+            </table>
+        </div>
+
+        <div class="section">
+            <h2>Social Security Analysis</h2>
+            <div class="info">Estimated Annual Benefit at Age {{ params.retirement_age }}: ${{ '{:,.2f}'.format(params.ss_benefit) }}</div>
+            
+            {% if ss_analysis %}
+            <h3>Claiming Strategy Analysis</h3>
+            <table>
+                <tr>
+                    <th>Claim Age</th>
+                    <th>Monthly Benefit</th>
+                    <th>Total by Age 80</th>
+                    <th>Total by Age 85</th>
+                    <th>Total by Age 90</th>
+                </tr>
+                {% for row in ss_analysis %}
+                <tr>
+                    <td>{{ row['Claim Age'] }}</td>
+                    <td>${{ '{:,.2f}'.format(row['Monthly Benefit']) }}</td>
+                    <td>${{ '{:,.0f}'.format(row['Total by Age 80']) }}</td>
+                    <td>${{ '{:,.0f}'.format(row['Total by Age 85']) }}</td>
+                    <td>${{ '{:,.0f}'.format(row['Total by Age 90']) }}</td>
+                </tr>
+                {% endfor %}
+            </table>
+            {% endif %}
+        </div>
+
+        {% if tax_analysis %}
+        <div class="section">
+            <h2>Tax Analysis</h2>
+            <div class="metric">Total Retirement Income: ${{ '{:,.2f}'.format(tax_analysis.income) }}</div>
+            <div class="metric">Annual Tax: ${{ '{:,.2f}'.format(tax_analysis.tax) }}</div>
+            <div class="metric">Effective Tax Rate: {{ '{:.1f}'.format(tax_analysis.effective_rate) }}%</div>
+            
+            <h3>Tax Bracket Breakdown</h3>
+            <table>
+                <tr><th>Bracket</th><th>Income in Bracket</th><th>Tax in Bracket</th></tr>
+                {% for row in tax_analysis.breakdown %}
+                <tr>
+                    <td>{{ row['Bracket'] }}</td>
+                    <td>${{ '{:,.2f}'.format(row['Income in Bracket']) }}</td>
+                    <td>${{ '{:,.2f}'.format(row['Tax in Bracket']) }}</td>
+                </tr>
+                {% endfor %}
+            </table>
+        </div>
+        {% endif %}
+
+        {% if allocation_analysis %}
+        <div class="section">
+            <h2>Asset Allocation Analysis</h2>
+            <table>
+                <tr>
+                    <th>Allocation</th>
+                    <th>Median</th>
+                    <th>Worst 5%</th>
+                    <th>Best 5%</th>
+                </tr>
+                {% for row in allocation_analysis %}
+                <tr>
+                    <td>{{ row['Allocation'] }}</td>
+                    <td>${{ '{:,.0f}'.format(row['Median']) }}</td>
+                    <td>${{ '{:,.0f}'.format(row['Worst 5%']) }}</td>
+                    <td>${{ '{:,.0f}'.format(row['Best 5%']) }}</td>
+                </tr>
+                {% endfor %}
+            </table>
+        </div>
+        {% endif %}
+
+        <div class="section">
+            <h2>Key Visualizations</h2>
+            {% for fig in figures %}
+            <div class="plot">
+                <img src="data:image/png;base64,{{ fig.image }}" alt="{{ fig.title }}">
+                <p>{{ fig.title }}</p>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="section">
+            <h2>Simulation Parameters</h2>
+            <table>
+                <tr><th>Parameter</th><th>Value</th></tr>
+                {% for key, value in params.assumptions.items() %}
+                <tr><td>{{ key }}</td><td>{{ value }}</td></tr>
+                {% endfor %}
+            </table>
+        </div>
+
+        <div class="section">
+            <h2>Key Assumptions and Notes</h2>
+            <ul>
+                <li>Stock returns include both capital appreciation and dividends</li>
+                <li>Property values are adjusted for mortgage paydown and appreciation</li>
+                <li>All withdrawals are adjusted for inflation</li>
+                <li>Rental income (positive cash flow) is reinvested in stocks</li>
+                <li>The simulation accounts for taxes on dividends, rental income, and capital gains</li>
+            </ul>
+        </div>
+    </body>
+    </html>
+    """
+
+    # Convert Plotly figures to base64 images
+    figure_data = []
+    for fig_dict in figures:
+        buf = BytesIO()
+        fig_dict['figure'].write_image(buf, format='png')
+        buf.seek(0)
+        fig_dict['image'] = base64.b64encode(buf.getvalue()).decode('utf-8')
+        figure_data.append({
+            'image': fig_dict['image'],
+            'title': fig_dict['title']
+        })
+
+    # Create template and render
+    template = Template(html_template)
+    html = template.render(params=params, figures=figure_data)
+    
+    return html
+
 # --------------------------------------------------
 # Streamlit App
 # --------------------------------------------------
@@ -950,8 +1183,17 @@ def main():
             help="Expected annual rental income in retirement"
         )
 
-    # ---------- MAIN CONTENT ----------
-    if st.button("Run Simulation"):
+    # Initialize session state for the report if it doesn't exist
+    if 'report_html' not in st.session_state:
+        st.session_state.report_html = None
+
+    # Move the report generation outside the simulation block
+    # After the simulation button but before its block:
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        run_simulation_button = st.button("Run Simulation")
+    
+    if run_simulation_button:
         # Calculate monthly and annual budget from expenses
         monthly_budget = sum(monthly_expenses.values())
         annual_budget = monthly_budget * 12
@@ -1251,6 +1493,91 @@ def main():
                 'Best 5%': '${:,.0f}'
             }))
 
+        # Collect all figures
+        report_figures = [
+            {
+                'figure': prepare_figure_for_report(fig_components, "Net Worth Components"),
+                'title': "Net Worth Components"
+            },
+            {
+                'figure': prepare_figure_for_report(fig_stock, "Stock Portfolio Value"),
+                'title': "Stock Portfolio Value"
+            },
+            {
+                'figure': prepare_figure_for_report(fig_cash_flow, "Cash Flow Pattern"),
+                'title': "Cash Flow Pattern"
+            },
+            {
+                'figure': prepare_figure_for_report(fig_budget, "Monthly Budget Breakdown"),
+                'title': "Monthly Budget Breakdown"
+            },
+            {
+                'figure': prepare_figure_for_report(fig_healthcare, "Projected Healthcare Costs"),
+                'title': "Projected Healthcare Costs"
+            }
+        ]
+
+        # Collect all parameters
+        report_params = {
+            'generation_date': date.today().strftime("%B %d, %Y"),
+            'failure_rate': f"{failure_rate:.1f}",
+            'initial_portfolio': stock_initial,
+            'annual_contribution': stock_annual_contribution,
+            'initial_withdrawal': annual_budget,
+            'final_withdrawal': annual_budget * (1 + inflation_rate) ** years_in_retirement,
+            'current_age': current_age,
+            'retirement_age': retirement_age,
+            'years_to_retirement': years_to_retirement,
+            'years_in_retirement': years_in_retirement,
+            'monthly_expenses': monthly_expenses,
+            'total_monthly': sum(monthly_expenses.values()),
+            'ss_benefit': ss_benefit,
+            'assumptions': {
+                'Expected Return': f"{stock_expected_return:.1%}",
+                'Volatility': f"{stock_volatility:.1%}",
+                'Inflation Rate': f"{inflation_rate:.1%}",
+                'Dividend Yield': f"{dividend_yield:.1%}",
+                'Capital Gains Tax': f"{cap_gains_tax_rate:.1%}",
+                'Healthcare Inflation': "5.0%",
+            }
+        }
+
+        # Collect optional analyses
+        ss_analysis_data = ss_analysis.to_dict('records') if show_ss_analysis else None
+        
+        tax_analysis_data = None
+        if show_tax_analysis:
+            tax_analysis_data = {
+                'income': total_retirement_income,
+                'tax': total_tax,
+                'effective_rate': (total_tax/total_retirement_income)*100,
+                'breakdown': tax_breakdown.to_dict('records')
+            }
+        
+        allocation_analysis_data = allocation_results.to_dict('records') if show_allocation_analysis else None
+
+        # Generate report
+        report_html = generate_html_report(
+            results, 
+            report_params, 
+            report_figures,
+            monthly_expenses,
+            ss_analysis_data,
+            tax_analysis_data,
+            allocation_analysis_data
+        )
+        
+        # Put the working download button in col2
+        with col2:
+            st.download_button(
+                "Download Report",
+                data=report_html,
+                file_name="retirement_report.html",
+                mime="text/html",
+                key="download_report"
+            )
+
 
 if __name__ == "__main__":
     main()
+
