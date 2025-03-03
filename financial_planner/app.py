@@ -927,6 +927,26 @@ def main():
     - Early retirement years have outsized impact
     """)
 
+    # Add before the simulation button
+    # 8. Analysis Options
+    st.sidebar.header("8️⃣ Analysis Options")
+    show_ss_analysis = st.sidebar.checkbox("Show Social Security Analysis", value=False)
+    show_tax_analysis = st.sidebar.checkbox("Show Tax Analysis", value=False)
+    show_allocation_analysis = st.sidebar.checkbox("Show Asset Allocation Analysis", value=False)
+    
+    if show_tax_analysis:
+        st.sidebar.subheader("Additional Tax Analysis Inputs")
+        pension_income = st.sidebar.number_input(
+            "Expected Annual Pension", 
+            0, 200_000, 0,
+            help="Expected annual pension income in retirement"
+        )
+        rental_income = st.sidebar.number_input(
+            "Expected Annual Rental Income", 
+            0, 200_000, 0,
+            help="Expected annual rental income in retirement"
+        )
+
     # ---------- MAIN CONTENT ----------
     if st.button("Run Simulation"):
         # Calculate monthly and annual budget from expenses
@@ -1166,7 +1186,7 @@ def main():
         st.plotly_chart(fig_healthcare)
 
         # Add Social Security strategy analysis
-        if st.checkbox("Show Social Security Strategy Analysis"):
+        if show_ss_analysis:
             st.subheader("Social Security Claiming Strategy Analysis")
             ss_analysis = analyze_social_security_strategy(birth_year, annual_income)
             st.dataframe(ss_analysis.style.format({
@@ -1177,13 +1197,8 @@ def main():
             }))
 
         # Add tax analysis
-        if st.checkbox("Show Tax Analysis"):
+        if show_tax_analysis:
             st.subheader("Estimated Tax Analysis in Retirement")
-            
-            # Estimate retirement income
-            pension_income = st.number_input("Expected Annual Pension", 0, 200_000, 0)
-            rental_income = st.number_input("Expected Annual Rental Income", 0, 200_000, 0)
-            
             total_retirement_income = (
                 annual_withdrawal_stocks +
                 ss_benefit +
@@ -1202,7 +1217,7 @@ def main():
             }))
 
         # Add asset allocation analysis
-        if st.checkbox("Show Asset Allocation Analysis"):
+        if show_allocation_analysis:
             st.subheader("Asset Allocation Analysis")
             st.write("Compare different stock/bond allocations over your investment horizon")
             
