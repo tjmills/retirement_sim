@@ -373,6 +373,10 @@ def run_simulation(
     healthcare_costs = estimate_healthcare_costs(date.today().year - birth_year, 
                                               retirement_age, life_expectancy)
     
+    # Add phase labels for visualization
+    phase_labels = ['Accumulation' if year < years_to_retirement else 'Retirement' 
+                   for year in range(total_years)]
+    
     for sim_i in range(n_sims):
         # Initialize stock
         current_stock_value = stock_initial
@@ -590,6 +594,9 @@ def run_simulation(
         summary_df[f"{group_name} 10th"]   = combined_df[cols].quantile(0.1, axis=1)
         summary_df[f"{group_name} 90th"]   = combined_df[cols].quantile(0.9, axis=1)
     
+    # Add phase labels to summary DataFrame
+    summary_df['Phase'] = phase_labels
+
     return {
         "all_sims": all_sims,
         "combined": combined_df,
@@ -830,12 +837,25 @@ def main():
             0, 1_000_000, 10_000, step=1_000,
             help="Amount you plan to invest annually during working years"
         )
-        annual_withdrawal_stocks = st.number_input(
-            "Annual Retirement Withdrawal", 
-            0, 500_000, 20_000, step=1_000,
-            help="Amount you plan to withdraw annually in retirement"
+        # Remove the manual withdrawal input and replace with calculated value
+        withdrawal_adjustment = st.slider(
+            "Retirement Budget Adjustment",
+            0.5, 1.5, 1.0, 0.05,
+            help="Adjust retirement spending relative to current budget (1.0 = same as current)"
         )
-    
+        
+        # Calculate annual withdrawal based on monthly expenses
+        monthly_budget = sum(monthly_expenses.values())
+        annual_withdrawal_stocks = monthly_budget * 12 * withdrawal_adjustment
+        
+        # Display the calculated withdrawal amount
+        st.info(f"""
+        **Planned Annual Withdrawal: ${annual_withdrawal_stocks:,.2f}**
+        - Based on current monthly expenses: ${monthly_budget:,.2f}
+        - Adjusted by factor: {withdrawal_adjustment:.2f}x
+        - Withdrawal Rate: {(annual_withdrawal_stocks / stock_initial * 100):.1f}% of current portfolio
+        """)
+
     # Market Assumptions
     with st.sidebar.expander("Market Assumptions", expanded=False):
         stock_expected_return = st.slider(
@@ -955,45 +975,114 @@ def main():
         the plan may be too risky.
         """)
 
-        # Net Worth Components (Stacked) - moved to top
+        # Net Worth Components with Phase Highlighting
         st.subheader("Total Net Worth Components Over Time")
         summary_df = results["summary"]
+        
+        # Create the stacked area chart
         fig_components = px.area(summary_df, x="Year", 
             y=["Stock Value Median", "Primary Residence Equity Median"] + 
               [f"Rental{i+1} Equity Median" for i in range(num_rentals)],
-            title="Net Worth Components (Median)",
+            title="Net Worth Components Over Time",
             labels={"value": "Value ($)", "variable": "Component"}
         )
+        
+        # Add vertical line at retirement
+        fig_components.add_vline(
+            x=years_to_retirement, 
+            line_dash="dash",
+            line_color="red",
+            annotation_text="Retirement",
+            annotation_position="top"
+        )
+        
+        # Add phase labels
+        fig_components.add_annotation(
+            x=years_to_retirement/2,
+            y=fig_components.data[0].y.max(),
+            text="Accumulation Phase",
+            showarrow=False,
+            yshift=10
+        )
+        fig_components.add_annotation(
+            x=years_to_retirement + years_in_retirement/2,
+            y=fig_components.data[0].y.max(),
+            text="Retirement Phase",
+            showarrow=False,
+            yshift=10
+        )
+        
         st.plotly_chart(fig_components, use_container_width=True)
 
-        # Plot: Stock Value
+        # Add accumulation phase summary
+        st.subheader("Accumulation Phase Summary")
+        accum_end = summary_df[summary_df['Year'] == years_to_retirement].iloc[0]
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric(
+                "Total Contributions",
+                f"${accum_end['Stock Contributions Median']:,.0f}",
+                help="Total amount contributed during working years"
+            )
+        with col2:
+            st.metric(
+                "Investment Growth",
+                f"${accum_end['Stock Appreciation Median']:,.0f}",
+                help="Total investment returns during accumulation"
+            )
+        with col3:
+            st.metric(
+                "Net Worth at Retirement",
+                f"${accum_end['Total Net Worth Median']:,.0f}",
+                help="Total net worth when entering retirement"
+            )
+
+        # Update Stock Value chart to show phases
         st.subheader("Stock Portfolio Value Over Time")
-        fig_stock = px.line(summary_df, x="Year", y="Stock Value Median", title="Stock Value (Median, 10th-90th)")
+        fig_stock = px.line(
+            summary_df, 
+            x="Year", 
+            y="Stock Value Median", 
+            title="Stock Value (Median, 10th-90th)",
+            color="Phase"  # Color lines by phase
+        )
         fig_stock.add_traces(px.line(summary_df, x="Year", y="Stock Value 10th").data)
         fig_stock.add_traces(px.line(summary_df, x="Year", y="Stock Value 90th").data)
         fig_stock.data[1].update(fill=None)
         fig_stock.data[2].update(fill='tonexty', fillcolor='rgba(0,100,80,0.2)')
-        fig_stock.update_traces(name='10th percentile', selector=dict(name='Stock Value 10th'))
-        fig_stock.update_traces(name='90th percentile', selector=dict(name='Stock Value 90th'))
-        fig_stock.update_traces(name='Median', selector=dict(name='Stock Value Median'))
+        
+        # Add vertical retirement line
+        fig_stock.add_vline(
+            x=years_to_retirement, 
+            line_dash="dash",
+            line_color="red",
+            annotation_text="Retirement",
+            annotation_position="top"
+        )
+        
         st.plotly_chart(fig_stock, use_container_width=True)
 
-        # Plot: Primary Residence Equity
-        st.subheader("Primary Residence Equity Over Time")
-        fig_primary_residence = px.line(summary_df, x="Year", y="Primary Residence Equity Median", title="Primary Residence Equity (Median, 10th-90th)")
-        fig_primary_residence.add_traces(px.line(summary_df, x="Year", y="Primary Residence Equity 10th").data)
-        fig_primary_residence.add_traces(px.line(summary_df, x="Year", y="Primary Residence Equity 90th").data)
-        fig_primary_residence.data[1].update(fill=None)
-        fig_primary_residence.data[2].update(fill='tonexty', fillcolor='rgba(0,100,80,0.2)')
-        fig_primary_residence.update_traces(name='10th percentile', selector=dict(name='Primary Residence Equity 10th'))
-        fig_primary_residence.update_traces(name='90th percentile', selector=dict(name='Primary Residence Equity 90th'))
-        fig_primary_residence.update_traces(name='Median', selector=dict(name='Primary Residence Equity Median'))
-        st.plotly_chart(fig_primary_residence, use_container_width=True)
-
-        # Plot: Stock Contributions vs Appreciation
-        st.subheader("Stock Contributions vs Appreciation Over Time")
-        fig_stock_breakdown = px.line(summary_df, x="Year", y=["Stock Contributions Median", "Stock Appreciation Median"], title="Stock Contributions vs Appreciation")
-        st.plotly_chart(fig_stock_breakdown, use_container_width=True)
+        # Add contribution vs withdrawal visualization
+        st.subheader("Cash Flow Pattern")
+        total_years = years_to_retirement + years_in_retirement
+        cash_flow_data = pd.DataFrame({
+            'Year': summary_df['Year'],
+            'Phase': summary_df['Phase'],
+            'Amount': [stock_annual_contribution if year < years_to_retirement else -annual_withdrawal_stocks 
+                      for year in range(total_years)]
+        })
+        
+        fig_cash_flow = px.bar(
+            cash_flow_data,
+            x='Year',
+            y='Amount',
+            color='Phase',
+            title='Annual Contributions vs Withdrawals',
+            labels={'Amount': 'Cash Flow ($)'}
+        )
+        fig_cash_flow.add_hline(y=0, line_color='black', line_width=1)
+        st.plotly_chart(fig_cash_flow, use_container_width=True)
 
         # Detailed Rental Plots
         num_r = len(rentals_data)
