@@ -38,8 +38,6 @@ def update_rental_property_monthly(rental, year_index=0):
     Returns:
       updated_rental (dict with updated property_value, mortgage_balance, cost_basis, etc.)
       net_rental_cash_flow (after paying mortgage interest, property tax, maintenance, and rental tax)
-        - If positive, we add it to stocks
-        - If negative, we assume it's covered externally (no stock deduction).
     """
     # Unpack rental params
     property_value = rental["property_value"]
@@ -80,18 +78,13 @@ def update_rental_property_monthly(rental, year_index=0):
         if principal_for_month < 0:
             principal_for_month = 0
             interest_for_month = monthly_payment
-        
         if principal_for_month > new_mortgage_balance:
             principal_for_month = new_mortgage_balance
-        
         new_mortgage_balance -= principal_for_month
         total_interest_paid += interest_for_month
 
     # 5) Net operating income (before mortgage principal)
-    net_operating_income = (gross_annual_rent
-                            - annual_property_tax
-                            - annual_maintenance
-                            - total_interest_paid)
+    net_operating_income = gross_annual_rent - annual_property_tax - annual_maintenance - total_interest_paid
 
     # 6) Depreciation reduces taxable income
     taxable_income = net_operating_income - annual_depreciation
@@ -103,14 +96,12 @@ def update_rental_property_monthly(rental, year_index=0):
 
     # 8) Net rental cash flow AFTER tax
     net_rental_cash_flow = net_operating_income - rental_income_tax
-    # If negative, we do NOT reduce stock in this model.
 
     # 9) Update cost basis
     new_cost_basis = cost_basis - annual_depreciation
     if new_cost_basis < 0:
         new_cost_basis = 0.0
 
-    # Store updates
     updated_rental = rental.copy()
     updated_rental["property_value"] = property_value
     updated_rental["mortgage_balance"] = new_mortgage_balance
@@ -135,7 +126,7 @@ def simulate_stock(
     inflation_rate=0.03
 ):
     """
-    One-year update for stock portfolio with inflation-adjusted withdrawals.
+    One-year update for taxable stock portfolio with optional inflation-adjusted withdrawals.
     """
     # Adjust withdrawal for inflation if needed
     if inflation_adjusted_withdrawal and current_year > 0:
@@ -144,10 +135,9 @@ def simulate_stock(
     # Withdraw (with check for sufficient funds)
     if withdrawal > current_stock_value:
         withdrawal = current_stock_value
-        
     current_stock_value -= withdrawal
 
-    # Add contribution
+    # Add annual contribution
     current_stock_value += stock_annual_contribution
 
     # Dividends (after tax)
@@ -155,7 +145,7 @@ def simulate_stock(
     dividends_after_tax = dividends * (1 - dividend_tax_rate)
     current_stock_value += dividends_after_tax
 
-    # Random return (using normal distribution)
+    # Apply random annual return
     annual_return = np.random.normal(loc=expected_return, scale=volatility)
     current_stock_value *= (1 + annual_return)
 
@@ -164,60 +154,61 @@ def simulate_stock(
     
     return current_stock_value, withdrawal
 
-# Add new helper functions
+# -----------------------------------------------
+# Social Security Calculation
+# -----------------------------------------------
 def calculate_social_security(birth_year, retirement_age, annual_income):
     """
     Rough estimation of social security benefits based on retirement age and income.
     """
-    # Simplified calculation - would need more complex rules for accuracy
     full_retirement_age = 67 if birth_year >= 1960 else 66
     monthly_benefit_at_full = min(annual_income * 0.4, 3895)  # Cap at max benefit
     
     if retirement_age < full_retirement_age:
-        reduction = 0.0625 * (full_retirement_age - retirement_age)  # 6.25% per year early
+        reduction = 0.0625 * (full_retirement_age - retirement_age)
         monthly_benefit = monthly_benefit_at_full * (1 - reduction)
     else:
-        increase = 0.08 * (retirement_age - full_retirement_age)  # 8% per year delayed
+        increase = 0.08 * (retirement_age - full_retirement_age)
         monthly_benefit = monthly_benefit_at_full * (1 + increase)
     
     return monthly_benefit * 12
 
+# -----------------------------------------------
+# Healthcare Costs Estimation
+# -----------------------------------------------
 def estimate_healthcare_costs(current_age, retirement_age, life_expectancy):
     """
     Estimates healthcare costs in retirement including Medicare premiums and out-of-pocket.
     """
-    base_annual_cost = 12000  # Average healthcare cost for 65-year-old
-    inflation_rate = 0.05  # Healthcare inflation typically higher than CPI
-    
+    base_annual_cost = 12000  # Average cost for a 65-year-old
+    inflation_rate = 0.05  # Healthcare inflation rate
     costs = []
     for age in range(retirement_age, life_expectancy + 1):
         year = age - retirement_age
         if age < 65:
-            # Pre-Medicare costs are higher
             annual_cost = base_annual_cost * 1.5 * (1 + inflation_rate) ** year
         else:
             annual_cost = base_annual_cost * (1 + inflation_rate) ** year
         costs.append(annual_cost)
-    
     return costs
 
+# -----------------------------------------------
+# Required Minimum Distribution (RMD) Calculation
+# -----------------------------------------------
 def calculate_rmd(age, account_balance):
     """
     Calculate Required Minimum Distribution for tax-deferred accounts.
     """
-    # Simplified RMD table
-    rmd_factors = {
-        72: 25.6, 75: 22.9, 80: 18.7, 85: 14.8, 90: 11.4, 95: 8.6
-    }
-    
-    # Find closest age factor
+    rmd_factors = {72: 25.6, 75: 22.9, 80: 18.7, 85: 14.8, 90: 11.4, 95: 8.6}
     closest_age = min(rmd_factors.keys(), key=lambda x: abs(x - age))
     return account_balance / rmd_factors[closest_age]
 
+# -----------------------------------------------
+# Social Security Strategy Analysis
+# -----------------------------------------------
 def analyze_social_security_strategy(birth_year, annual_income):
     """
     Analyzes different Social Security claiming strategies.
-    Returns a DataFrame comparing benefits at different ages.
     """
     strategies = []
     for claim_age in range(62, 71):
@@ -225,7 +216,6 @@ def analyze_social_security_strategy(birth_year, annual_income):
         total_by_80 = monthly_benefit * 12 * (80 - claim_age)
         total_by_85 = monthly_benefit * 12 * (85 - claim_age)
         total_by_90 = monthly_benefit * 12 * (90 - claim_age)
-        
         strategies.append({
             'Claim Age': claim_age,
             'Monthly Benefit': monthly_benefit,
@@ -233,14 +223,15 @@ def analyze_social_security_strategy(birth_year, annual_income):
             'Total by Age 85': total_by_85,
             'Total by Age 90': total_by_90
         })
-    
     return pd.DataFrame(strategies)
 
+# -----------------------------------------------
+# Tax Bracket Calculation
+# -----------------------------------------------
 def calculate_tax_brackets(retirement_income):
     """
     Calculates estimated tax brackets in retirement.
     """
-    # 2024 tax brackets (married filing jointly)
     brackets = [
         (0, 22000, 0.10),
         (22000, 89450, 0.12),
@@ -258,21 +249,21 @@ def calculate_tax_brackets(retirement_income):
     for min_income, max_income, rate in brackets:
         if remaining_income <= 0:
             break
-            
         taxable_in_bracket = min(remaining_income, max_income - min_income)
         tax_in_bracket = taxable_in_bracket * rate
-        
         breakdown.append({
             'Bracket': f"{rate*100:.1f}%",
             'Income in Bracket': taxable_in_bracket,
             'Tax in Bracket': tax_in_bracket
         })
-        
         total_tax += tax_in_bracket
         remaining_income -= taxable_in_bracket
     
     return pd.DataFrame(breakdown), total_tax
 
+# -----------------------------------------------
+# Asset Allocation Analysis (Monte Carlo)
+# -----------------------------------------------
 def analyze_asset_allocations(initial_balance, years, n_sims=1000):
     """
     Analyzes different stock/bond allocations using Monte Carlo simulation.
@@ -290,22 +281,20 @@ def analyze_asset_allocations(initial_balance, years, n_sims=1000):
         stock_pct = stocks / 100
         bond_pct = bonds / 100
         
-        # Simplified return assumptions
         stock_return = 0.07
         stock_vol = 0.15
         bond_return = 0.03
         bond_vol = 0.05
         
         portfolio_return = (stock_return * stock_pct) + (bond_return * bond_pct)
-        portfolio_vol = np.sqrt((stock_vol**2 * stock_pct**2) + 
-                              (bond_vol**2 * bond_pct**2))
+        portfolio_vol = np.sqrt((stock_vol**2 * stock_pct**2) + (bond_vol**2 * bond_pct**2))
         
         final_values = []
         for _ in range(n_sims):
             value = initial_balance
             for _ in range(years):
-                return_this_year = np.random.normal(portfolio_return, portfolio_vol)
-                value *= (1 + return_this_year)
+                r = np.random.normal(portfolio_return, portfolio_vol)
+                value *= (1 + r)
             final_values.append(value)
             
         results.append({
@@ -318,19 +307,19 @@ def analyze_asset_allocations(initial_balance, years, n_sims=1000):
     return pd.DataFrame(results)
 
 # -----------------------------------------------
-# Main Simulation
+# Main Simulation Function
 # -----------------------------------------------
 def run_simulation(
-    # Required parameters first
+    # Required parameters
     birth_year,
     retirement_age,
     life_expectancy,
     annual_income,
-    annual_budget,  # Renamed from monthly_budget to annual_budget
+    annual_budget,  # Annual budget derived from monthly expenses
     tax_deferred_balance,
     roth_balance,
     n_sims,
-    # Stock parameters
+    # Taxable Investment parameters
     stock_initial,
     stock_annual_contribution,
     stock_expected_return,
@@ -339,9 +328,9 @@ def run_simulation(
     dividend_yield,
     dividend_tax_rate,
     withdrawal,
-    # Rentals
+    # Rental properties
     rentals_data,
-    # Primary Residence
+    # Primary Residence parameters
     primary_residence_value,
     primary_mortgage_balance,
     primary_mortgage_interest_rate,
@@ -351,14 +340,19 @@ def run_simulation(
     # Luxury Expense
     luxury_expense_amount,
     luxury_expense_year,
-    # Optional parameters last
+    # Optional parameters
     inflation_rate=0.03,
     healthcare_inflation=0.05
 ):
     """
-    Enhanced simulation including social security, healthcare, and tax-advantaged accounts.
+    Enhanced simulation including Social Security, healthcare, and simulation of
+    tax-advantaged accounts (tax-deferred and Roth). The total net worth now includes:
+      - Taxable (stock) account
+      - Tax-deferred account (with RMDs during retirement)
+      - Roth account
+      - Primary residence equity
+      - Rental property equity
     """
-    # Calculate simulation years based on age parameters
     current_year = date.today().year
     current_age = current_year - birth_year
     years_to_retirement = retirement_age - current_age
@@ -366,132 +360,102 @@ def run_simulation(
     total_years = years_to_retirement + years_in_retirement
     
     all_sims = []
-    failure_count = 0  # Track simulations that run out of money
-    
+    failure_count = 0
     num_rentals = len(rentals_data)
     
-    # Calculate social security benefit
+    # Social Security and Healthcare estimates
     annual_ss_benefit = calculate_social_security(birth_year, retirement_age, annual_income)
+    healthcare_costs = estimate_healthcare_costs(current_age, retirement_age, life_expectancy)
     
-    # Get healthcare cost projections
-    healthcare_costs = estimate_healthcare_costs(date.today().year - birth_year, 
-                                              retirement_age, life_expectancy)
+    phase_labels = ['Accumulation' if year < years_to_retirement else 'Retirement' for year in range(total_years)]
     
-    # Add phase labels for visualization
-    phase_labels = ['Accumulation' if year < years_to_retirement else 'Retirement' 
-                   for year in range(total_years)]
-    
+    # Run each simulation iteration
     for sim_i in range(n_sims):
-        # Initialize stock
+        # Initialize accounts
         current_stock_value = stock_initial
-        total_contributions = 0.0  # Track total contributions to stocks
-        total_appreciation = 0.0  # Track total appreciation of stocks
-
+        total_contributions = 0.0  # For taxable account tracking
+        current_tax_deferred = tax_deferred_balance
+        current_roth = roth_balance
+        
         # Initialize primary residence
         current_primary_residence_value = primary_residence_value
         current_primary_mortgage_balance = primary_mortgage_balance
-
-        # Calculate monthly payment for primary residence
         primary_monthly_payment = standard_mortgage_payment(
             principal=primary_mortgage_balance,
             annual_interest_rate=primary_mortgage_interest_rate,
             mortgage_years=primary_mortgage_years_left
         )
-
-        # Copy rentals so as not to overwrite original
+        
+        # Copy rental properties
         my_rentals = [rd.copy() for rd in rentals_data]
-
-        # Lists to store annual results
+        
+        # Lists to track annual results
         year_list = []
         stock_vals = []
+        tax_deferred_vals = []
+        roth_vals = []
         total_net_worth_list = []
         primary_residence_equity_list = []
         stock_contributions_list = []
         stock_appreciation_list = []
-        
         rentals_equity_lists = [ [] for _ in range(num_rentals) ]
         rentals_mortgage_lists = [ [] for _ in range(num_rentals) ]
         rentals_cashflow_lists = [ [] for _ in range(num_rentals) ]
-
+        actual_withdrawals = []
         portfolio_failed = False
-        actual_withdrawals = []  # Track actual withdrawal amounts
 
         for year in range(total_years):
             current_age = (date.today().year - birth_year) + year
             year_label = year + 1
             is_retirement = (year >= years_to_retirement)
-
-            # 1) Update each rental
+            
+            # 1) Update Rental Properties
             for r_i, rental in enumerate(my_rentals):
                 if rental["property_value"] <= 0:
-                    # Already sold/zero
                     rentals_equity_lists[r_i].append(0)
                     rentals_mortgage_lists[r_i].append(0)
                     rentals_cashflow_lists[r_i].append(0)
                     continue
-                
                 updated_r, net_cf = update_rental_property_monthly(rental, year_index=year)
                 my_rentals[r_i] = updated_r
-
-                # If net CF > 0, add it to stocks
                 if net_cf > 0:
                     current_stock_value += net_cf
-
-                # Check if we sell this year
                 sale_year = updated_r["sale_year"]
                 if sale_year == year_label:
-                    # Gains
-                    gains = updated_r["property_value"] - updated_r["cost_basis"]
-                    if gains < 0:
-                        gains = 0
+                    gains = max(updated_r["property_value"] - updated_r["cost_basis"], 0)
                     cap_gains_tax = gains * updated_r["rental_cap_gains_tax"]
-                    net_sale_proceeds = (updated_r["property_value"] - updated_r["mortgage_balance"]) - cap_gains_tax
-                    if net_sale_proceeds < 0:
-                        net_sale_proceeds = 0
+                    net_sale_proceeds = max((updated_r["property_value"] - updated_r["mortgage_balance"]) - cap_gains_tax, 0)
                     current_stock_value += net_sale_proceeds
-                    
-                    # Zero out
                     updated_r["property_value"] = 0
                     updated_r["mortgage_balance"] = 0
                     updated_r["cost_basis"] = 0
                     my_rentals[r_i] = updated_r
-                
-                # Record equity & mortgage
                 eq = max(updated_r["property_value"] - updated_r["mortgage_balance"], 0)
                 rentals_equity_lists[r_i].append(eq)
                 rentals_mortgage_lists[r_i].append(updated_r["mortgage_balance"])
                 rentals_cashflow_lists[r_i].append(net_cf)
-
-            # 2) Luxury Expense in this year?
+            
+            # 2) Luxury Expense (if applicable)
             if (luxury_expense_amount > 0) and (luxury_expense_year == year_label):
-                # clamp to stock
                 expense = min(luxury_expense_amount, current_stock_value)
                 current_stock_value -= expense
-
-            # 3) Retirement Income and Expenses
+            
+            # 3) Retirement Income & Expenses
             if is_retirement:
-                # Calculate inflation-adjusted annual budget
-                inflation_adjusted_budget = annual_budget * (1 + inflation_rate) ** (year - years_to_retirement)
-                
-                # Add social security income
-                ss_income = annual_ss_benefit * (1 + inflation_rate) ** (year - years_to_retirement)
+                inflation_adjusted_budget = annual_budget * ((1 + inflation_rate) ** (year - years_to_retirement))
+                ss_income = annual_ss_benefit * ((1 + inflation_rate) ** (year - years_to_retirement))
                 current_stock_value += ss_income
-                
-                # Subtract healthcare costs
-                if year - years_to_retirement < len(healthcare_costs):
+                if (year - years_to_retirement) < len(healthcare_costs):
                     healthcare_cost = healthcare_costs[year - years_to_retirement]
                     current_stock_value -= healthcare_cost
-                
-                # Handle RMDs from tax-deferred accounts
-                if current_age >= 72 and tax_deferred_balance > 0:
-                    rmd = calculate_rmd(current_age, tax_deferred_balance)
-                    tax_deferred_balance -= rmd
-                    current_stock_value += rmd * 0.8  # Assuming 20% tax rate on RMDs
-
-            # 4) Stocks (accum or retire)
+                # Process RMD from tax-deferred account if age >= 72
+                if current_age >= 72 and current_tax_deferred > 0:
+                    rmd = calculate_rmd(current_age, current_tax_deferred)
+                    current_tax_deferred -= rmd
+                    current_stock_value += rmd * 0.8  # 20% tax assumed on withdrawn RMD
+            # 4) Update Taxable Stock Account
             stock_contribution = stock_annual_contribution if not is_retirement else 0
-            stock_withdrawal = inflation_adjusted_budget if is_retirement else 0  # Use inflation-adjusted budget
-            
+            stock_withdrawal = inflation_adjusted_budget if is_retirement else 0
             current_stock_value, actual_withdrawal = simulate_stock(
                 current_stock_value,
                 stock_contribution,
@@ -501,26 +465,29 @@ def run_simulation(
                 dividend_yield,
                 dividend_tax_rate,
                 withdrawal=stock_withdrawal,
-                inflation_adjusted_withdrawal=False,  # We're already adjusting for inflation
+                inflation_adjusted_withdrawal=False,
                 current_year=year,
                 inflation_rate=inflation_rate
             )
-            
-            # Track if portfolio fails (can't meet withdrawal needs)
             if is_retirement and actual_withdrawal < stock_withdrawal:
                 portfolio_failed = True
-
             actual_withdrawals.append(actual_withdrawal)
-            
-            # Track contributions and appreciation
             total_contributions += stock_contribution
             total_appreciation = current_stock_value - total_contributions
-
-            # Update primary residence
+            
+            # 5) Update Tax-Deferred and Roth Accounts
+            r_return = np.random.normal(stock_expected_return, stock_volatility)
+            if not is_retirement:
+                current_tax_deferred *= (1 + r_return)
+                current_roth *= (1 + r_return)
+            else:
+                current_tax_deferred *= (1 + r_return)
+                current_roth *= (1 + r_return)
+                # RMD already processed above for tax-deferred
+            
+            # 6) Update Primary Residence
             annual_appreciation = np.random.normal(loc=primary_appreciation_mean, scale=primary_appreciation_std)
             current_primary_residence_value *= (1 + annual_appreciation)
-
-            # Monthly mortgage loop for primary residence
             monthly_interest_rate = primary_mortgage_interest_rate / 12.0
             for _ in range(12):
                 interest_for_month = current_primary_mortgage_balance * monthly_interest_rate
@@ -528,31 +495,31 @@ def run_simulation(
                 if principal_for_month < 0:
                     principal_for_month = 0
                     interest_for_month = primary_monthly_payment
-                
                 if principal_for_month > current_primary_mortgage_balance:
                     principal_for_month = current_primary_mortgage_balance
-                
                 current_primary_mortgage_balance -= principal_for_month
-
-            # Calculate total net worth
-            total_net_worth = (
-                current_stock_value +
-                sum(max(r["property_value"] - r["mortgage_balance"], 0) for r in my_rentals) +
-                max(current_primary_residence_value - current_primary_mortgage_balance, 0)
-            )
-
-            # Record values for this year
+            
+            # 7) Total Net Worth Calculation (all accounts included)
+            rental_equity = sum(max(r["property_value"] - r["mortgage_balance"], 0) for r in my_rentals)
+            primary_equity = max(current_primary_residence_value - current_primary_mortgage_balance, 0)
+            total_net_worth = current_stock_value + current_tax_deferred + current_roth + rental_equity + primary_equity
+            
+            # Record values for the year
             year_list.append(year_label)
             stock_vals.append(current_stock_value)
+            tax_deferred_vals.append(current_tax_deferred)
+            roth_vals.append(current_roth)
             total_net_worth_list.append(total_net_worth)
-            primary_residence_equity_list.append(max(current_primary_residence_value - current_primary_mortgage_balance, 0))
+            primary_residence_equity_list.append(primary_equity)
             stock_contributions_list.append(total_contributions)
             stock_appreciation_list.append(total_appreciation)
-
-        # Build a DataFrame for this simulation
+        
+        # Build simulation DataFrame (including new accounts)
         sim_data = {
             "Year": year_list,
-            "Stock Value": stock_vals,
+            "Taxable Stock Value": stock_vals,
+            "Tax-Deferred Balance": tax_deferred_vals,
+            "Roth Balance": roth_vals,
             "Total Net Worth": total_net_worth_list,
             "Primary Residence Equity": primary_residence_equity_list,
             "Stock Contributions": stock_contributions_list,
@@ -562,31 +529,22 @@ def run_simulation(
             sim_data[f"Rental{r_i+1} Equity"] = rentals_equity_lists[r_i]
             sim_data[f"Rental{r_i+1} Mortgage"] = rentals_mortgage_lists[r_i]
             sim_data[f"Rental{r_i+1} CashFlow"] = rentals_cashflow_lists[r_i]
-
+        
         sim_df = pd.DataFrame(sim_data)
         all_sims.append(sim_df)
-
         if portfolio_failed:
             failure_count += 1
-
+    
     failure_rate = failure_count / n_sims * 100
 
-    # Combine all simulations => summary
+    # Combine simulations into a summary DataFrame
     combined_df = None
     for i, df_i in enumerate(all_sims):
-        rename_map = {}
-        for col in df_i.columns:
-            if col != "Year":
-                rename_map[col] = f"{col} {i}"
+        rename_map = {col: f"{col} {i}" for col in df_i.columns if col != "Year"}
         temp = df_i.rename(columns=rename_map)
-        if combined_df is None:
-            combined_df = temp
-        else:
-            combined_df = pd.merge(combined_df, temp, on="Year", how="inner")
+        combined_df = temp if combined_df is None else pd.merge(combined_df, temp, on="Year", how="inner")
     
     summary_df = pd.DataFrame({"Year": combined_df["Year"]})
-    
-    # Gather columns by original name
     col_groups = {}
     for col in all_sims[0].columns:
         if col == "Year":
@@ -594,14 +552,12 @@ def run_simulation(
         matching = [c for c in combined_df.columns if c.startswith(col)]
         col_groups[col] = matching
     
-    # For each group, compute mean/median/10th/90th
     for group_name, cols in col_groups.items():
         summary_df[f"{group_name} Mean"]   = combined_df[cols].mean(axis=1)
         summary_df[f"{group_name} Median"] = combined_df[cols].median(axis=1)
         summary_df[f"{group_name} 10th"]   = combined_df[cols].quantile(0.1, axis=1)
         summary_df[f"{group_name} 90th"]   = combined_df[cols].quantile(0.9, axis=1)
     
-    # Add phase labels to summary DataFrame
     summary_df['Phase'] = phase_labels
 
     return {
@@ -611,15 +567,14 @@ def run_simulation(
         "failure_rate": failure_rate
     }
 
-# Add this helper function at the top with other functions
+# -----------------------------------------------
+# Figure Preparation for Report
+# -----------------------------------------------
 def prepare_figure_for_report(fig, title):
     """
-    Prepare a Plotly figure for the HTML report by ensuring proper colors and formatting.
+    Prepare a Plotly figure for the HTML report.
     """
-    # Define a consistent color palette
     colors = px.colors.qualitative.Set3
-
-    # Update general layout
     fig.update_layout(
         title_x=0.5,
         plot_bgcolor='white',
@@ -627,23 +582,22 @@ def prepare_figure_for_report(fig, title):
         title={'font': {'size': 24}},
         showlegend=True
     )
-
-    # Update colors based on plot type
-    if isinstance(fig, go.Figure):  # For pie charts and other go.Figure objects
+    if isinstance(fig, go.Figure):
         if 'pie' in [trace.type for trace in fig.data]:
             fig.update_traces(
                 marker=dict(colors=colors),
                 textinfo='label+percent',
                 textposition='inside'
             )
-    else:  # For px figures (line, area, bar charts)
+    else:
         if hasattr(fig, 'data'):
             for i, trace in enumerate(fig.data):
                 trace.update(marker_color=colors[i % len(colors)])
-
     return fig
 
-# Add this function to generate the HTML report
+# -----------------------------------------------
+# HTML Report Generation
+# -----------------------------------------------
 def generate_html_report(results, params, figures, monthly_expenses, ss_analysis=None, tax_analysis=None, allocation_analysis=None):
     """
     Generate an HTML report from simulation results and figures.
@@ -685,19 +639,16 @@ def generate_html_report(results, params, figures, monthly_expenses, ss_analysis
             <h1>Retirement Portfolio Analysis Report</h1>
             <p>Generated on {{ params.generation_date }}</p>
         </div>
-
         <div class="section">
             <h2>Executive Summary</h2>
             <div class="alert">Portfolio Failure Rate: {{ params.failure_rate }}%</div>
             <p>A failure rate above 5% suggests the plan may be too risky.</p>
-            
             <h3>Key Metrics</h3>
             <div class="metric">Initial Portfolio: ${{ '{:,.2f}'.format(params.initial_portfolio) }}</div>
             <div class="metric">Annual Contribution: ${{ '{:,.2f}'.format(params.annual_contribution) }}</div>
             <div class="metric">Initial Withdrawal: ${{ '{:,.2f}'.format(params.initial_withdrawal) }}</div>
             <div class="metric">Final Year Withdrawal: ${{ '{:,.2f}'.format(params.final_withdrawal) }}</div>
         </div>
-
         <div class="section">
             <h2>Timeline</h2>
             <div class="metric">Current Age: {{ params.current_age }}</div>
@@ -705,7 +656,6 @@ def generate_html_report(results, params, figures, monthly_expenses, ss_analysis
             <div class="metric">Years to Retirement: {{ params.years_to_retirement }}</div>
             <div class="metric">Years in Retirement: {{ params.years_in_retirement }}</div>
         </div>
-
         <div class="section">
             <h2>Monthly Budget Breakdown</h2>
             <table>
@@ -717,11 +667,9 @@ def generate_html_report(results, params, figures, monthly_expenses, ss_analysis
                 <tr><th>Total Annual</th><th>${{ '{:,.2f}'.format(params.total_monthly * 12) }}</th></tr>
             </table>
         </div>
-
         <div class="section">
             <h2>Social Security Analysis</h2>
             <div class="info">Estimated Annual Benefit at Age {{ params.retirement_age }}: ${{ '{:,.2f}'.format(params.ss_benefit) }}</div>
-            
             {% if ss_analysis %}
             <h3>Claiming Strategy Analysis</h3>
             <table>
@@ -744,14 +692,12 @@ def generate_html_report(results, params, figures, monthly_expenses, ss_analysis
             </table>
             {% endif %}
         </div>
-
         {% if tax_analysis %}
         <div class="section">
             <h2>Tax Analysis</h2>
             <div class="metric">Total Retirement Income: ${{ '{:,.2f}'.format(tax_analysis.income) }}</div>
             <div class="metric">Annual Tax: ${{ '{:,.2f}'.format(tax_analysis.tax) }}</div>
             <div class="metric">Effective Tax Rate: {{ '{:.1f}'.format(tax_analysis.effective_rate) }}%</div>
-            
             <h3>Tax Bracket Breakdown</h3>
             <table>
                 <tr><th>Bracket</th><th>Income in Bracket</th><th>Tax in Bracket</th></tr>
@@ -765,7 +711,6 @@ def generate_html_report(results, params, figures, monthly_expenses, ss_analysis
             </table>
         </div>
         {% endif %}
-
         {% if allocation_analysis %}
         <div class="section">
             <h2>Asset Allocation Analysis</h2>
@@ -787,7 +732,6 @@ def generate_html_report(results, params, figures, monthly_expenses, ss_analysis
             </table>
         </div>
         {% endif %}
-
         <div class="section">
             <h2>Key Visualizations</h2>
             {% for fig in figures %}
@@ -797,7 +741,6 @@ def generate_html_report(results, params, figures, monthly_expenses, ss_analysis
             </div>
             {% endfor %}
         </div>
-
         <div class="section">
             <h2>Simulation Parameters</h2>
             <table>
@@ -807,7 +750,6 @@ def generate_html_report(results, params, figures, monthly_expenses, ss_analysis
                 {% endfor %}
             </table>
         </div>
-
         <div class="section">
             <h2>Key Assumptions and Notes</h2>
             <ul>
@@ -815,14 +757,13 @@ def generate_html_report(results, params, figures, monthly_expenses, ss_analysis
                 <li>Property values are adjusted for mortgage paydown and appreciation</li>
                 <li>All withdrawals are adjusted for inflation</li>
                 <li>Rental income (positive cash flow) is reinvested in stocks</li>
+                <li>Tax-deferred and Roth accounts grow at market rates; RMDs are applied to the tax-deferred account in retirement</li>
                 <li>The simulation accounts for taxes on dividends, rental income, and capital gains</li>
             </ul>
         </div>
     </body>
     </html>
     """
-
-    # Convert Plotly figures to base64 images
     figure_data = []
     for fig_dict in figures:
         buf = BytesIO()
@@ -833,16 +774,13 @@ def generate_html_report(results, params, figures, monthly_expenses, ss_analysis
             'image': fig_dict['image'],
             'title': fig_dict['title']
         })
-
-    # Create template and render
     template = Template(html_template)
     html = template.render(params=params, figures=figure_data)
-    
     return html
 
-# --------------------------------------------------
+# -----------------------------------------------
 # Streamlit App
-# --------------------------------------------------
+# -----------------------------------------------
 def main():
     st.set_page_config(page_title="Retirement Portfolio Simulator", layout="wide")
     st.title("Retirement Portfolio Simulator")
@@ -854,39 +792,28 @@ def main():
     - 🏠 Primary residence with mortgage amortization
     - 🏢 Multiple rental properties with cash flow analysis
     - 💰 Retirement withdrawals with inflation adjustment
+    - 🏦 Simulation of tax-deferred and Roth account growth
     """)
 
     # ---------- SIDEBAR ----------
     st.sidebar.title("Your Information")
     
-    # 1. Personal Information (moved to top)
+    # 1. Personal Information
     st.sidebar.header("1️⃣ Personal Details")
-    birth_year = st.sidebar.number_input(
-        "Birth Year",
-        1940, 2000, 1970,
-        help="Used to calculate Social Security benefits and RMDs"
-    )
-    retirement_age = st.sidebar.number_input(
-        "Planned Retirement Age",
-        55, 75, 65,
-        help="Age at which you plan to retire"
-    )
-    life_expectancy = st.sidebar.number_input(
-        "Life Expectancy",
-        retirement_age, 100, 90,
-        help="Plan through this age for safety"
-    )
-    annual_income = st.sidebar.number_input(
-        "Current Annual Income",
-        0, 500_000, 80_000,
-        help="Used for Social Security calculation"
-    )
+    birth_year = st.sidebar.number_input("Birth Year", 1940, 2000, 1970,
+                                          help="Used to calculate Social Security benefits and RMDs")
+    retirement_age = st.sidebar.number_input("Planned Retirement Age", 55, 75, 65,
+                                               help="Age at which you plan to retire")
+    life_expectancy = st.sidebar.number_input("Life Expectancy", retirement_age, 100, 90,
+                                                help="Plan through this age for safety")
+    annual_income = st.sidebar.number_input("Current Annual Income", 0, 500_000, 80_000,
+                                             help="Used for Social Security calculation")
     
-    # Calculate and display timeline
     current_year = date.today().year
     current_age = current_year - birth_year
     years_to_retirement = retirement_age - current_age
     years_in_retirement = life_expectancy - retirement_age
+    total_years = years_to_retirement + years_in_retirement
     
     st.sidebar.info(f"""
     **Your Timeline:**
@@ -913,248 +840,125 @@ def main():
     
     # 3. Current Assets
     st.sidebar.header("3️⃣ Current Assets")
-    
-    # Retirement Accounts
     with st.sidebar.expander("Retirement Accounts", expanded=True):
-        tax_deferred_balance = st.number_input(
-            "Tax-Deferred Balance (401k, IRA)",
-            0, 10_000_000, 100_000,
-            help="Current balance in traditional retirement accounts"
-        )
-        roth_balance = st.number_input(
-            "Roth Balance",
-            0, 10_000_000, 50_000,
-            help="Current balance in Roth accounts"
-        )
-        stock_initial = st.number_input(
-            "Taxable Investment Balance", 
-            0, 10_000_000, 50_000, step=1_000,
-            help="Current balance in taxable investment accounts"
-        )
+        tax_deferred_balance = st.number_input("Tax-Deferred Balance (401k, IRA)", 0, 10_000_000, 100_000,
+                                                help="Current balance in traditional retirement accounts")
+        roth_balance = st.number_input("Roth Balance", 0, 10_000_000, 50_000,
+                                       help="Current balance in Roth accounts")
+        stock_initial = st.number_input("Taxable Investment Balance", 0, 10_000_000, 50_000, step=1_000,
+                                        help="Current balance in taxable investment accounts")
     
     # Primary Residence
     with st.sidebar.expander("Primary Residence", expanded=True):
-        primary_residence_value = st.number_input(
-            "Home Value",
-            0, 10_000_000, 300_000,
-            help="Current market value of your primary residence"
-        )
-        primary_mortgage_balance = st.number_input(
-            "Mortgage Balance",
-            0, 10_000_000, 150_000,
-            help="Remaining balance on your mortgage"
-        )
-        primary_mortgage_interest_rate = st.slider(
-            "Mortgage Rate",
-            0.0, 0.2, 0.04, 0.005,
-            help="Annual interest rate on your mortgage"
-        )
-        primary_mortgage_years_left = st.number_input(
-            "Years Left on Mortgage",
-            0, 40, 25,
-            help="Remaining years on your mortgage term"
-        )
-        primary_appreciation_mean = st.slider(
-            "Home Appreciation Rate",
-            0.0, 0.2, 0.03, 0.01,
-            help="Expected annual appreciation rate for your home"
-        )
-        primary_appreciation_std = st.slider(
-            "Home Appreciation Volatility",
-            0.0, 0.5, 0.1, 0.01,
-            help="Standard deviation of annual home appreciation"
-        )
+        primary_residence_value = st.number_input("Home Value", 0, 10_000_000, 300_000,
+                                                  help="Current market value of your primary residence")
+        primary_mortgage_balance = st.number_input("Mortgage Balance", 0, 10_000_000, 150_000,
+                                                   help="Remaining balance on your mortgage")
+        primary_mortgage_interest_rate = st.slider("Mortgage Rate", 0.0, 0.2, 0.04, 0.005,
+                                                   help="Annual interest rate on your mortgage")
+        primary_mortgage_years_left = st.number_input("Years Left on Mortgage", 0, 40, 25,
+                                                      help="Remaining years on your mortgage term")
+        primary_appreciation_mean = st.slider("Home Appreciation Rate", 0.0, 0.2, 0.03, 0.01,
+                                              help="Expected annual appreciation rate for your home")
+        primary_appreciation_std = st.slider("Home Appreciation Volatility", 0.0, 0.5, 0.1, 0.01,
+                                             help="Standard deviation of annual home appreciation")
     
     # Rental Properties
     with st.sidebar.expander("Rental Properties", expanded=True):
-        num_rentals = st.number_input(
-            "Number of Rental Properties",
-            0, 5, 0,
-            help="How many rental properties do you own?"
-        )
-        
+        num_rentals = st.number_input("Number of Rental Properties", 0, 5, 0,
+                                      help="How many rental properties do you own?")
         rentals_data = []
         for i in range(num_rentals):
             st.markdown(f"**Rental Property #{i+1}**")
-            
             rental_data = {
-                "property_value": st.number_input(
-                    f"Property Value (Rental {i+1})", 
-                    0, 10_000_000, 200_000, step=1_000,
-                    help="Current market value of the rental property"
-                ),
-                "mortgage_balance": st.number_input(
-                    f"Mortgage Balance (Rental {i+1})", 
-                    0, 10_000_000, 120_000, step=1_000,
-                    help="Remaining balance on the mortgage"
-                ),
-                "mortgage_interest_rate": st.slider(
-                    f"Mortgage Rate (Rental {i+1})", 
-                    0.0, 0.2, 0.04, 0.005,
-                    help="Annual interest rate on the mortgage"
-                ),
-                "monthly_rent_base": st.number_input(
-                    f"Monthly Rent (Rental {i+1})", 
-                    0, 50_000, 1500, step=100,
-                    help="Current monthly rent charged"
-                ),
-                "cost_basis": st.number_input(
-                    f"Cost Basis (Rental {i+1})", 
-                    0, 2_000_000, 180_000, step=1_000,
-                    help="Original purchase price plus improvements"
-                ),
-                "sale_year": st.number_input(
-                    f"Planned Sale Year (Rental {i+1})", 
-                    0, 100, 0, step=1,
-                    help="Year you plan to sell (0 = no plan)"
-                ),
-                "rental_cap_gains_tax": st.slider(
-                    f"Capital Gains Tax Rate (Rental {i+1})", 
-                    0.0, 0.5, 0.15, 0.01,
-                    help="Expected tax rate on sale profits"
-                ),
-                "property_tax_rate": st.slider(
-                    f"Property Tax Rate (Rental {i+1})", 
-                    0.0, 0.05, 0.01, 0.001,
-                    help="Annual property tax as % of value"
-                ),
-                "maintenance_rate": st.slider(
-                    f"Maintenance Rate (Rental {i+1})", 
-                    0.0, 0.05, 0.01, 0.001,
-                    help="Annual maintenance as % of value"
-                ),
-                "vacancy_rate": st.slider(
-                    f"Vacancy Rate (Rental {i+1})", 
-                    0.0, 1.0, 0.05, 0.01,
-                    help="Expected vacancy rate"
-                ),
-                "rental_income_tax_rate": st.slider(
-                    f"Rental Income Tax Rate (Rental {i+1})", 
-                    0.0, 0.5, 0.2, 0.01,
-                    help="Tax rate on rental income"
-                ),
-                "rent_inflation": st.slider(
-                    f"Rent Inflation (Rental {i+1})", 
-                    0.0, 0.1, 0.02, 0.01,
-                    help="Expected annual increase in rent"
-                ),
-                "app_mean": st.slider(
-                    f"Appreciation Rate (Rental {i+1})", 
-                    0.0, 0.2, 0.03, 0.01,
-                    help="Expected annual property appreciation"
-                ),
-                "app_std": st.slider(
-                    f"Appreciation Volatility (Rental {i+1})", 
-                    0.0, 0.5, 0.1, 0.01,
-                    help="Standard deviation of appreciation"
-                )
+                "property_value": st.number_input(f"Property Value (Rental {i+1})", 0, 10_000_000, 200_000, step=1_000,
+                                                  help="Current market value of the rental property"),
+                "mortgage_balance": st.number_input(f"Mortgage Balance (Rental {i+1})", 0, 10_000_000, 120_000, step=1_000,
+                                                    help="Remaining balance on the mortgage"),
+                "mortgage_interest_rate": st.slider(f"Mortgage Rate (Rental {i+1})", 0.0, 0.2, 0.04, 0.005,
+                                                    help="Annual interest rate on the mortgage"),
+                "monthly_rent_base": st.number_input(f"Monthly Rent (Rental {i+1})", 0, 50_000, 1500, step=100,
+                                                     help="Current monthly rent charged"),
+                "cost_basis": st.number_input(f"Cost Basis (Rental {i+1})", 0, 2_000_000, 180_000, step=1_000,
+                                              help="Original purchase price plus improvements"),
+                "sale_year": st.number_input(f"Planned Sale Year (Rental {i+1})", 0, 100, 0, step=1,
+                                             help="Year you plan to sell (0 = no plan)"),
+                "rental_cap_gains_tax": st.slider(f"Capital Gains Tax Rate (Rental {i+1})", 0.0, 0.5, 0.15, 0.01,
+                                                  help="Expected tax rate on sale profits"),
+                "property_tax_rate": st.slider(f"Property Tax Rate (Rental {i+1})", 0.0, 0.05, 0.01, 0.001,
+                                               help="Annual property tax as % of value"),
+                "maintenance_rate": st.slider(f"Maintenance Rate (Rental {i+1})", 0.0, 0.05, 0.01, 0.001,
+                                              help="Annual maintenance as % of value"),
+                "vacancy_rate": st.slider(f"Vacancy Rate (Rental {i+1})", 0.0, 1.0, 0.05, 0.01,
+                                          help="Expected vacancy rate"),
+                "rental_income_tax_rate": st.slider(f"Rental Income Tax Rate (Rental {i+1})", 0.0, 0.5, 0.2, 0.01,
+                                                    help="Tax rate on rental income"),
+                "rent_inflation": st.slider(f"Rent Inflation (Rental {i+1})", 0.0, 0.1, 0.02, 0.01,
+                                            help="Expected annual increase in rent"),
+                "app_mean": st.slider(f"Appreciation Rate (Rental {i+1})", 0.0, 0.2, 0.03, 0.01,
+                                      help="Expected annual property appreciation"),
+                "app_std": st.slider(f"Appreciation Volatility (Rental {i+1})", 0.0, 0.5, 0.1, 0.01,
+                                     help="Standard deviation of appreciation")
             }
-            
-            # Calculate monthly payment and depreciation
             monthly_payment = standard_mortgage_payment(
                 principal=rental_data["mortgage_balance"],
                 annual_interest_rate=rental_data["mortgage_interest_rate"],
-                mortgage_years=30  # Assuming 30-year mortgages for rentals
+                mortgage_years=30  # Assume 30-year mortgage for rentals
             )
             rental_data["monthly_payment"] = monthly_payment
-            
-            # Standard 27.5 year depreciation for residential rentals
             rental_data["annual_depreciation"] = rental_data["cost_basis"] / 27.5
-            
             rentals_data.append(rental_data)
-
-    # 4. Investment Settings
-    st.sidebar.header("4️⃣ Investment Strategy")
     
-    # Contributions
+    # 4. Investment Strategy
+    st.sidebar.header("4️⃣ Investment Strategy")
     with st.sidebar.expander("Contributions & Withdrawals", expanded=True):
-        stock_annual_contribution = st.number_input(
-            "Annual Investment Contribution", 
-            0, 1_000_000, 10_000, step=1_000,
-            help="Amount you plan to invest annually during working years"
-        )
-        # Remove the manual withdrawal input and replace with calculated value
-        withdrawal_adjustment = st.slider(
-            "Retirement Budget Adjustment",
-            0.5, 1.5, 1.0, 0.05,
-            help="Adjust retirement spending relative to current budget (1.0 = same as current)"
-        )
-        
-        # Calculate annual withdrawal based on monthly expenses
+        stock_annual_contribution = st.number_input("Annual Investment Contribution", 0, 1_000_000, 10_000, step=1_000,
+                                                    help="Amount you plan to invest annually during working years")
+        withdrawal_adjustment = st.slider("Retirement Budget Adjustment", 0.5, 1.5, 1.0, 0.05,
+                                          help="Adjust retirement spending relative to current budget (1.0 = same as current)")
         monthly_budget = sum(monthly_expenses.values())
         annual_withdrawal_stocks = monthly_budget * 12 * withdrawal_adjustment
-        
-        # Display the calculated withdrawal amount
         st.info(f"""
         **Planned Annual Withdrawal: ${annual_withdrawal_stocks:,.2f}**
         - Based on current monthly expenses: ${monthly_budget:,.2f}
         - Adjusted by factor: {withdrawal_adjustment:.2f}x
         - Withdrawal Rate: {(annual_withdrawal_stocks / stock_initial * 100):.1f}% of current portfolio
         """)
-
-    # Market Assumptions
-    with st.sidebar.expander("Market Assumptions", expanded=False):
-        stock_expected_return = st.slider(
-            "Expected Return (mean)", 
-            0.0, 0.2, 0.07, 0.01,
-            help="Average annual investment return before inflation"
-        )
-        stock_volatility = st.slider(
-            "Volatility (std dev)", 
-            0.0, 0.5, 0.15, 0.01,
-            help="Standard deviation of annual returns"
-        )
-        dividend_yield = st.slider(
-            "Dividend Yield", 
-            0.0, 0.1, 0.02, 0.01,
-            help="Expected annual dividend yield"
-        )
     
-    # 5. Tax & Economic Assumptions
+    with st.sidebar.expander("Market Assumptions", expanded=False):
+        stock_expected_return = st.slider("Expected Return (mean)", 0.0, 0.2, 0.07, 0.01,
+                                          help="Average annual investment return before inflation")
+        stock_volatility = st.slider("Volatility (std dev)", 0.0, 0.5, 0.15, 0.01,
+                                     help="Standard deviation of annual returns")
+        dividend_yield = st.slider("Dividend Yield", 0.0, 0.1, 0.02, 0.01,
+                                   help="Expected annual dividend yield")
+    
+    # 5. Tax & Economic Factors
     st.sidebar.header("5️⃣ Tax & Economic Factors")
     with st.sidebar.expander("Tax & Inflation Settings", expanded=False):
-        cap_gains_tax_rate = st.slider(
-            "Capital Gains Tax Rate", 
-            0.0, 0.5, 0.15, 0.01,
-            help="Long-term capital gains tax rate"
-        )
-        dividend_tax_rate = st.slider(
-            "Dividend Tax Rate", 
-            0.0, 0.5, 0.15, 0.01,
-            help="Tax rate on dividend income"
-        )
-        inflation_rate = st.slider(
-            "Inflation Rate", 
-            0.01, 0.10, 0.03, 0.001,
-            help="Expected annual inflation rate"
-        )
+        cap_gains_tax_rate = st.slider("Capital Gains Tax Rate", 0.0, 0.5, 0.15, 0.01,
+                                       help="Long-term capital gains tax rate")
+        dividend_tax_rate = st.slider("Dividend Tax Rate", 0.0, 0.5, 0.15, 0.01,
+                                      help="Tax rate on dividend income")
+        inflation_rate = st.slider("Inflation Rate", 0.01, 0.10, 0.03, 0.001,
+                                   help="Expected annual inflation rate")
     
     # 6. Optional Planning
     st.sidebar.header("6️⃣ Optional Planning")
     with st.sidebar.expander("Future Expenses", expanded=False):
-        luxury_expense_amount = st.number_input(
-            "One-time Expense Amount", 
-            0, 5_000_000, 0, step=1_000,
-            help="Optional future large expense (e.g., vacation home)"
-        )
+        luxury_expense_amount = st.number_input("One-time Expense Amount", 0, 5_000_000, 0, step=1_000,
+                                                help="Optional future large expense (e.g., vacation home)")
         if luxury_expense_amount > 0:
-            luxury_expense_year = st.number_input(
-                "Year for Expense", 
-                1, years_to_retirement + years_in_retirement, 1,
-                help="Which year to plan this expense"
-            )
+            luxury_expense_year = st.number_input("Year for Expense", 1, years_to_retirement + years_in_retirement, 1,
+                                                  help="Which year to plan this expense")
         else:
             luxury_expense_year = 0
     
     # 7. Simulation Settings
     st.sidebar.header("7️⃣ Simulation Settings")
-    n_sims = st.sidebar.number_input(
-        "Number of Simulations", 
-        100, 2000, 200, 
-        help="More simulations = more accurate results but slower"
-    )
+    n_sims = st.sidebar.number_input("Number of Simulations", 100, 2000, 200,
+                                     help="More simulations = more accurate results but slower")
     
-    # Warning about assumptions
     st.sidebar.warning("""
     ⚠️ **Important Notes:**
     - Past performance doesn't guarantee future returns
@@ -1162,8 +966,7 @@ def main():
     - Consider using conservative estimates
     - Early retirement years have outsized impact
     """)
-
-    # Add before the simulation button
+    
     # 8. Analysis Options
     st.sidebar.header("8️⃣ Analysis Options")
     show_ss_analysis = st.sidebar.checkbox("Show Social Security Analysis", value=False)
@@ -1172,29 +975,19 @@ def main():
     
     if show_tax_analysis:
         st.sidebar.subheader("Additional Tax Analysis Inputs")
-        pension_income = st.sidebar.number_input(
-            "Expected Annual Pension", 
-            0, 200_000, 0,
-            help="Expected annual pension income in retirement"
-        )
-        rental_income = st.sidebar.number_input(
-            "Expected Annual Rental Income", 
-            0, 200_000, 0,
-            help="Expected annual rental income in retirement"
-        )
-
-    # Initialize session state for the report if it doesn't exist
+        pension_income = st.sidebar.number_input("Expected Annual Pension", 0, 200_000, 0,
+                                                 help="Expected annual pension income in retirement")
+        rental_income = st.sidebar.number_input("Expected Annual Rental Income", 0, 200_000, 0,
+                                                help="Expected annual rental income in retirement")
+    
     if 'report_html' not in st.session_state:
         st.session_state.report_html = None
-
-    # Move the report generation outside the simulation block
-    # After the simulation button but before its block:
+    
     col1, col2 = st.columns([1, 1])
     with col1:
         run_simulation_button = st.button("Run Simulation")
     
     if run_simulation_button:
-        # Calculate monthly and annual budget from expenses
         monthly_budget = sum(monthly_expenses.values())
         annual_budget = monthly_budget * 12
 
@@ -1204,7 +997,7 @@ def main():
                 retirement_age,
                 life_expectancy,
                 annual_income,
-                annual_budget,  # Pass annual budget instead of monthly
+                annual_budget,
                 tax_deferred_balance,
                 roth_balance,
                 n_sims,
@@ -1228,10 +1021,7 @@ def main():
                 inflation_rate,
                 healthcare_inflation=0.05
             )
-        
         st.success("Simulation Complete!")
-
-        # Display failure rate at the top
         failure_rate = results["failure_rate"]
         st.error(f"Portfolio Failure Rate: {failure_rate:.1f}%")
         st.markdown("""
@@ -1239,20 +1029,16 @@ def main():
         withdrawal rate adjusted for inflation. A failure rate above 5% suggests 
         the plan may be too risky.
         """)
-
-        # Net Worth Components with Phase Highlighting
+        
         st.subheader("Total Net Worth Components Over Time")
         summary_df = results["summary"]
-        
-        # Create the stacked area chart
         fig_components = px.area(summary_df, x="Year", 
-            y=["Stock Value Median", "Primary Residence Equity Median"] + 
+            y=["Taxable Stock Value Median", "Tax-Deferred Balance Median", "Roth Balance Median",
+               "Primary Residence Equity Median"] + 
               [f"Rental{i+1} Equity Median" for i in range(num_rentals)],
             title="Net Worth Components Over Time",
             labels={"value": "Value ($)", "variable": "Component"}
         )
-        
-        # Add vertical line at retirement
         fig_components.add_vline(
             x=years_to_retirement, 
             line_dash="dash",
@@ -1260,8 +1046,6 @@ def main():
             annotation_text="Retirement",
             annotation_position="top"
         )
-        
-        # Add phase labels
         fig_components.add_annotation(
             x=years_to_retirement/2,
             y=fig_components.data[0].y.max(),
@@ -1276,48 +1060,33 @@ def main():
             showarrow=False,
             yshift=10
         )
-        
         st.plotly_chart(fig_components, use_container_width=True)
-
-        # Add accumulation phase summary
+        
         st.subheader("Accumulation Phase Summary")
         accum_end = summary_df[summary_df['Year'] == years_to_retirement].iloc[0]
-        
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric(
-                "Total Contributions",
-                f"${accum_end['Stock Contributions Median']:,.0f}",
-                help="Total amount contributed during working years"
-            )
+            st.metric("Total Contributions", f"${accum_end['Stock Contributions Median']:,.0f}",
+                      help="Total amount contributed during working years")
         with col2:
-            st.metric(
-                "Investment Growth",
-                f"${accum_end['Stock Appreciation Median']:,.0f}",
-                help="Total investment returns during accumulation"
-            )
+            st.metric("Investment Growth", f"${accum_end['Stock Appreciation Median']:,.0f}",
+                      help="Total investment returns during accumulation")
         with col3:
-            st.metric(
-                "Net Worth at Retirement",
-                f"${accum_end['Total Net Worth Median']:,.0f}",
-                help="Total net worth when entering retirement"
-            )
-
-        # Update Stock Value chart to show phases
+            st.metric("Net Worth at Retirement", f"${accum_end['Total Net Worth Median']:,.0f}",
+                      help="Total net worth when entering retirement")
+        
         st.subheader("Stock Portfolio Value Over Time")
         fig_stock = px.line(
             summary_df, 
             x="Year", 
-            y="Stock Value Median", 
-            title="Stock Value (Median, 10th-90th)",
-            color="Phase"  # Color lines by phase
+            y="Taxable Stock Value Median", 
+            title="Taxable Stock Value (Median, 10th-90th)",
+            color="Phase"
         )
-        fig_stock.add_traces(px.line(summary_df, x="Year", y="Stock Value 10th").data)
-        fig_stock.add_traces(px.line(summary_df, x="Year", y="Stock Value 90th").data)
+        fig_stock.add_traces(px.line(summary_df, x="Year", y="Taxable Stock Value 10th").data)
+        fig_stock.add_traces(px.line(summary_df, x="Year", y="Taxable Stock Value 90th").data)
         fig_stock.data[1].update(fill=None)
         fig_stock.data[2].update(fill='tonexty', fillcolor='rgba(0,100,80,0.2)')
-        
-        # Add vertical retirement line
         fig_stock.add_vline(
             x=years_to_retirement, 
             line_dash="dash",
@@ -1325,22 +1094,18 @@ def main():
             annotation_text="Retirement",
             annotation_position="top"
         )
-        
         st.plotly_chart(fig_stock, use_container_width=True)
-
-        # Add contribution vs withdrawal visualization
+        
         st.subheader("Cash Flow Pattern")
-        total_years = years_to_retirement + years_in_retirement
         cash_flow_data = pd.DataFrame({
             'Year': summary_df['Year'],
             'Phase': summary_df['Phase'],
             'Amount': [
                 stock_annual_contribution if year < years_to_retirement 
-                else -(annual_budget * (1 + inflation_rate) ** (year - years_to_retirement))
+                else -(annual_budget * ((1 + inflation_rate) ** (year - years_to_retirement)))
                 for year in range(total_years)
             ]
         })
-        
         fig_cash_flow = px.bar(
             cash_flow_data,
             x='Year',
@@ -1350,28 +1115,21 @@ def main():
             labels={'Amount': 'Cash Flow ($)'}
         )
         fig_cash_flow.add_hline(y=0, line_color='black', line_width=1)
-        
-        # Add annotations showing initial and final withdrawal amounts
         if years_in_retirement > 0:
             initial_withdrawal = annual_budget
-            final_withdrawal = annual_budget * (1 + inflation_rate) ** years_in_retirement
-            
+            final_withdrawal = annual_budget * ((1 + inflation_rate) ** years_in_retirement)
             st.info(f"""
             **Withdrawal Amounts (Today's vs Final Year):**
             - Initial Annual Withdrawal: ${initial_withdrawal:,.2f}
             - Final Year Withdrawal: ${final_withdrawal:,.2f}
             - Total Increase: {((final_withdrawal/initial_withdrawal - 1) * 100):.1f}%
             """)
-            
         st.plotly_chart(fig_cash_flow, use_container_width=True)
-
-        # Detailed Rental Plots
+        
         num_r = len(rentals_data)
         for i in range(num_r):
             r_label_eq = f"Rental{i+1} Equity"
             r_label_mort = f"Rental{i+1} Mortgage"
-            
-            # Equity
             if f"{r_label_eq} Median" in summary_df.columns:
                 st.subheader(f"**{r_label_eq}** Over Time")
                 fig_eq = px.line(summary_df, x="Year", y=f"{r_label_eq} Median", 
@@ -1380,12 +1138,7 @@ def main():
                 fig_eq.add_traces(px.line(summary_df, x="Year", y=f"{r_label_eq} 90th").data)
                 fig_eq.data[1].update(fill=None)
                 fig_eq.data[2].update(fill='tonexty', fillcolor='rgba(100,0,80,0.2)')
-                fig_eq.update_traces(name='10th percentile', selector=dict(name=f"{r_label_eq} 10th"))
-                fig_eq.update_traces(name='90th percentile', selector=dict(name=f"{r_label_eq} 90th"))
-                fig_eq.update_traces(name='Median', selector=dict(name=f"{r_label_eq} Median"))
                 st.plotly_chart(fig_eq, use_container_width=True)
-
-            # Mortgage
             if f"{r_label_mort} Median" in summary_df.columns:
                 st.subheader(f"**{r_label_mort}** Over Time")
                 fig_mort = px.line(summary_df, x="Year", y=f"{r_label_mort} Median", 
@@ -1394,27 +1147,22 @@ def main():
                 fig_mort.add_traces(px.line(summary_df, x="Year", y=f"{r_label_mort} 90th").data)
                 fig_mort.data[1].update(fill=None)
                 fig_mort.data[2].update(fill='tonexty', fillcolor='rgba(0,100,80,0.2)')
-                fig_mort.update_traces(name='10th percentile', selector=dict(name=f"{r_label_mort} 10th"))
-                fig_mort.update_traces(name='90th percentile', selector=dict(name=f"{r_label_mort} 90th"))
-                fig_mort.update_traces(name='Median', selector=dict(name=f"{r_label_mort} Median"))
                 st.plotly_chart(fig_mort, use_container_width=True)
-
-        # Move summary table to bottom
+        
         st.subheader("Detailed Simulation Results")
         st.markdown("Complete simulation results showing mean, median, and percentile values for all metrics:")
         st.dataframe(summary_df)
-
-        # Final recap
+        
         st.markdown("""
         ### Key Assumptions and Notes
         - Stock returns include both capital appreciation and dividends
         - Property values are adjusted for mortgage paydown and appreciation
         - All withdrawals are adjusted for inflation
         - Rental income (positive cash flow) is reinvested in stocks
+        - Tax-deferred and Roth accounts grow at market rates; RMDs are applied to the tax-deferred account in retirement
         - The simulation accounts for taxes on dividends, rental income, and capital gains
         """)
-
-        # Add new visualizations after simulation
+        
         st.subheader("Monthly Budget Breakdown")
         fig_budget = px.pie(
             values=list(monthly_expenses.values()),
@@ -1423,30 +1171,18 @@ def main():
         )
         st.plotly_chart(fig_budget)
         
-        # Show estimated Social Security benefit
         ss_benefit = calculate_social_security(birth_year, retirement_age, annual_income)
         st.info(f"Estimated Annual Social Security Benefit: ${ss_benefit:,.2f}")
         
-        # Show healthcare cost projection
         st.subheader("Projected Healthcare Costs")
-        healthcare_costs = estimate_healthcare_costs(
-            date.today().year - birth_year,
-            retirement_age,
-            life_expectancy
-        )
+        healthcare_costs = estimate_healthcare_costs(current_age, retirement_age, life_expectancy)
         healthcare_df = pd.DataFrame({
             "Age": range(retirement_age, life_expectancy + 1),
             "Annual Cost": healthcare_costs
         })
-        fig_healthcare = px.line(
-            healthcare_df,
-            x="Age",
-            y="Annual Cost",
-            title="Projected Annual Healthcare Costs"
-        )
+        fig_healthcare = px.line(healthcare_df, x="Age", y="Annual Cost", title="Projected Annual Healthcare Costs")
         st.plotly_chart(fig_healthcare)
-
-        # Add Social Security strategy analysis
+        
         if show_ss_analysis:
             st.subheader("Social Security Claiming Strategy Analysis")
             ss_analysis = analyze_social_security_strategy(birth_year, annual_income)
@@ -1456,19 +1192,11 @@ def main():
                 'Total by Age 85': '${:,.0f}',
                 'Total by Age 90': '${:,.0f}'
             }))
-
-        # Add tax analysis
+        
         if show_tax_analysis:
             st.subheader("Estimated Tax Analysis in Retirement")
-            total_retirement_income = (
-                annual_withdrawal_stocks +
-                ss_benefit +
-                pension_income +
-                rental_income
-            )
-            
+            total_retirement_income = (annual_withdrawal_stocks + ss_benefit + pension_income + rental_income)
             tax_breakdown, total_tax = calculate_tax_brackets(total_retirement_income)
-            
             st.write(f"Estimated Total Retirement Income: ${total_retirement_income:,.2f}")
             st.write(f"Estimated Annual Tax: ${total_tax:,.2f}")
             st.write(f"Effective Tax Rate: {(total_tax/total_retirement_income)*100:.1f}%")
@@ -1476,61 +1204,41 @@ def main():
                 'Income in Bracket': '${:,.2f}',
                 'Tax in Bracket': '${:,.2f}'
             }))
-
-        # Add asset allocation analysis
+        
         if show_allocation_analysis:
             st.subheader("Asset Allocation Analysis")
             st.write("Compare different stock/bond allocations over your investment horizon")
-            
             allocation_results = analyze_asset_allocations(
                 initial_balance=stock_initial,
                 years=years_to_retirement + years_in_retirement
             )
-            
             st.dataframe(allocation_results.style.format({
                 'Median': '${:,.0f}',
                 'Worst 5%': '${:,.0f}',
                 'Best 5%': '${:,.0f}'
             }))
-
-        # Collect all figures
+        
         report_figures = [
-            {
-                'figure': prepare_figure_for_report(fig_components, "Net Worth Components"),
-                'title': "Net Worth Components"
-            },
-            {
-                'figure': prepare_figure_for_report(fig_stock, "Stock Portfolio Value"),
-                'title': "Stock Portfolio Value"
-            },
-            {
-                'figure': prepare_figure_for_report(fig_cash_flow, "Cash Flow Pattern"),
-                'title': "Cash Flow Pattern"
-            },
-            {
-                'figure': prepare_figure_for_report(fig_budget, "Monthly Budget Breakdown"),
-                'title': "Monthly Budget Breakdown"
-            },
-            {
-                'figure': prepare_figure_for_report(fig_healthcare, "Projected Healthcare Costs"),
-                'title': "Projected Healthcare Costs"
-            }
+            {'figure': prepare_figure_for_report(fig_components, "Net Worth Components"), 'title': "Net Worth Components"},
+            {'figure': prepare_figure_for_report(fig_stock, "Taxable Stock Value"), 'title': "Taxable Stock Value"},
+            {'figure': prepare_figure_for_report(fig_cash_flow, "Cash Flow Pattern"), 'title': "Cash Flow Pattern"},
+            {'figure': prepare_figure_for_report(fig_budget, "Monthly Budget Breakdown"), 'title': "Monthly Budget Breakdown"},
+            {'figure': prepare_figure_for_report(fig_healthcare, "Projected Healthcare Costs"), 'title': "Projected Healthcare Costs"}
         ]
-
-        # Collect all parameters
+        
         report_params = {
             'generation_date': date.today().strftime("%B %d, %Y"),
             'failure_rate': f"{failure_rate:.1f}",
             'initial_portfolio': stock_initial,
             'annual_contribution': stock_annual_contribution,
             'initial_withdrawal': annual_budget,
-            'final_withdrawal': annual_budget * (1 + inflation_rate) ** years_in_retirement,
+            'final_withdrawal': annual_budget * ((1 + inflation_rate) ** years_in_retirement),
             'current_age': current_age,
             'retirement_age': retirement_age,
             'years_to_retirement': years_to_retirement,
             'years_in_retirement': years_in_retirement,
             'monthly_expenses': monthly_expenses,
-            'total_monthly': sum(monthly_expenses.values()),
+            'total_monthly': total_monthly,
             'ss_benefit': ss_benefit,
             'assumptions': {
                 'Expected Return': f"{stock_expected_return:.1%}",
@@ -1541,10 +1249,8 @@ def main():
                 'Healthcare Inflation': "5.0%",
             }
         }
-
-        # Collect optional analyses
-        ss_analysis_data = ss_analysis.to_dict('records') if show_ss_analysis else None
         
+        ss_analysis_data = ss_analysis.to_dict('records') if show_ss_analysis else None
         tax_analysis_data = None
         if show_tax_analysis:
             tax_analysis_data = {
@@ -1553,10 +1259,8 @@ def main():
                 'effective_rate': (total_tax/total_retirement_income)*100,
                 'breakdown': tax_breakdown.to_dict('records')
             }
-        
         allocation_analysis_data = allocation_results.to_dict('records') if show_allocation_analysis else None
-
-        # Generate report
+        
         report_html = generate_html_report(
             results, 
             report_params, 
@@ -1567,17 +1271,9 @@ def main():
             allocation_analysis_data
         )
         
-        # Put the working download button in col2
         with col2:
-            st.download_button(
-                "Download Report",
-                data=report_html,
-                file_name="retirement_report.html",
-                mime="text/html",
-                key="download_report"
-            )
-
+            st.download_button("Download Report", data=report_html, file_name="retirement_report.html",
+                               mime="text/html", key="download_report")
 
 if __name__ == "__main__":
     main()
-
