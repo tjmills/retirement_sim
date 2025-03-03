@@ -124,32 +124,40 @@ def simulate_stock(
     cap_gains_tax_rate,
     dividend_yield,
     dividend_tax_rate,
-    withdrawal=0.0
+    withdrawal=0.0,
+    inflation_adjusted_withdrawal=True,
+    current_year=0,
+    inflation_rate=0.03
 ):
     """
-    One-year update for stock portfolio. 
-    If withdrawal > current_stock_value, the account hits 0.
+    One-year update for stock portfolio with inflation-adjusted withdrawals.
     """
-    # Withdraw
+    # Adjust withdrawal for inflation if needed
+    if inflation_adjusted_withdrawal and current_year > 0:
+        withdrawal *= (1 + inflation_rate) ** current_year
+
+    # Withdraw (with check for sufficient funds)
     if withdrawal > current_stock_value:
         withdrawal = current_stock_value
+        
     current_stock_value -= withdrawal
 
     # Add contribution
     current_stock_value += stock_annual_contribution
 
-    # Dividends
+    # Dividends (after tax)
     dividends = current_stock_value * dividend_yield
     dividends_after_tax = dividends * (1 - dividend_tax_rate)
     current_stock_value += dividends_after_tax
 
-    # Random return
+    # Random return (using normal distribution)
     annual_return = np.random.normal(loc=expected_return, scale=volatility)
     current_stock_value *= (1 + annual_return)
 
     if current_stock_value < 0:
         current_stock_value = 0
-    return current_stock_value
+    
+    return current_stock_value, withdrawal
 
 
 # -----------------------------------------------
@@ -164,39 +172,68 @@ def run_simulation(
     stock_annual_contribution,
     stock_expected_return,
     stock_volatility,
-    stock_cap_gains_tax,
-    stock_dividend_yield,
-    stock_dividend_tax_rate,
-    annual_withdrawal_stocks,
-    # Rentals (multiple)
-    rentals_data,  
+    cap_gains_tax_rate,
+    dividend_yield,
+    dividend_tax_rate,
+    withdrawal,
+    # Rentals
+    rentals_data,
+    # Primary Residence
+    primary_residence_value,
+    primary_mortgage_balance,
+    primary_mortgage_interest_rate,
+    primary_mortgage_years_left,
+    primary_appreciation_mean,
+    primary_appreciation_std,
     # Luxury Expense
     luxury_expense_amount,
-    luxury_expense_year
+    luxury_expense_year,
+    inflation_rate=0.03
 ):
     """
-    Simulates multiple rentals + stock + a one-time luxury expense.
-    There's no 'land' or rebalancing here.
+    Simulates multiple rentals + stock + luxury expense with inflation adjustment
+    and failure rate tracking.
     """
     total_years = years_accum + years_retire
     all_sims = []
+    failure_count = 0  # Track simulations that run out of money
     
     num_rentals = len(rentals_data)
     
     for sim_i in range(n_sims):
         # Initialize stock
         current_stock_value = stock_initial
-        
+        total_contributions = 0.0  # Track total contributions to stocks
+        total_appreciation = 0.0  # Track total appreciation of stocks
+
+        # Initialize primary residence
+        current_primary_residence_value = primary_residence_value
+        current_primary_mortgage_balance = primary_mortgage_balance
+
+        # Calculate monthly payment for primary residence
+        primary_monthly_payment = standard_mortgage_payment(
+            principal=primary_mortgage_balance,
+            annual_interest_rate=primary_mortgage_interest_rate,
+            mortgage_years=primary_mortgage_years_left
+        )
+
         # Copy rentals so as not to overwrite original
         my_rentals = [rd.copy() for rd in rentals_data]
 
         # Lists to store annual results
         year_list = []
         stock_vals = []
+        total_net_worth_list = []
+        primary_residence_equity_list = []
+        stock_contributions_list = []
+        stock_appreciation_list = []
         
         rentals_equity_lists = [ [] for _ in range(num_rentals) ]
         rentals_mortgage_lists = [ [] for _ in range(num_rentals) ]
         rentals_cashflow_lists = [ [] for _ in range(num_rentals) ]
+
+        portfolio_failed = False
+        actual_withdrawals = []  # Track actual withdrawal amounts
 
         for year in range(total_years):
             year_label = year + 1
@@ -251,25 +288,73 @@ def run_simulation(
 
             # 3) Stocks (accum or retire)
             stock_contribution = stock_annual_contribution if not is_retirement else 0
-            stock_withdrawal = annual_withdrawal_stocks if is_retirement else 0
-            current_stock_value = simulate_stock(
+            stock_withdrawal = withdrawal if is_retirement else 0
+            
+            current_stock_value, actual_withdrawal = simulate_stock(
                 current_stock_value,
                 stock_contribution,
                 stock_expected_return,
                 stock_volatility,
-                stock_cap_gains_tax,
-                stock_dividend_yield,
-                stock_dividend_tax_rate,
-                withdrawal=stock_withdrawal
+                cap_gains_tax_rate,
+                dividend_yield,
+                dividend_tax_rate,
+                withdrawal=stock_withdrawal,
+                inflation_adjusted_withdrawal=True,
+                current_year=year,
+                inflation_rate=inflation_rate
+            )
+            
+            # Track if portfolio fails (can't meet withdrawal needs)
+            if is_retirement and actual_withdrawal < stock_withdrawal:
+                portfolio_failed = True
+
+            actual_withdrawals.append(actual_withdrawal)
+            
+            # Track contributions and appreciation
+            total_contributions += stock_contribution
+            total_appreciation = current_stock_value - total_contributions
+
+            # Update primary residence
+            annual_appreciation = np.random.normal(loc=primary_appreciation_mean, scale=primary_appreciation_std)
+            current_primary_residence_value *= (1 + annual_appreciation)
+
+            # Monthly mortgage loop for primary residence
+            monthly_interest_rate = primary_mortgage_interest_rate / 12.0
+            for _ in range(12):
+                interest_for_month = current_primary_mortgage_balance * monthly_interest_rate
+                principal_for_month = primary_monthly_payment - interest_for_month
+                if principal_for_month < 0:
+                    principal_for_month = 0
+                    interest_for_month = primary_monthly_payment
+                
+                if principal_for_month > current_primary_mortgage_balance:
+                    principal_for_month = current_primary_mortgage_balance
+                
+                current_primary_mortgage_balance -= principal_for_month
+
+            # Calculate total net worth
+            total_net_worth = (
+                current_stock_value +
+                sum(max(r["property_value"] - r["mortgage_balance"], 0) for r in my_rentals) +
+                max(current_primary_residence_value - current_primary_mortgage_balance, 0)
             )
 
+            # Record total net worth and primary residence equity
             year_list.append(year_label)
             stock_vals.append(current_stock_value)
+            total_net_worth_list.append(total_net_worth)
+            primary_residence_equity_list.append(max(current_primary_residence_value - current_primary_mortgage_balance, 0))
+            stock_contributions_list.append(total_contributions)
+            stock_appreciation_list.append(total_appreciation)
         
         # Build a DataFrame for this simulation
         sim_data = {
             "Year": year_list,
-            "Stock Value": stock_vals
+            "Stock Value": stock_vals,
+            "Total Net Worth": total_net_worth_list,
+            "Primary Residence Equity": primary_residence_equity_list,
+            "Stock Contributions": stock_contributions_list,
+            "Stock Appreciation": stock_appreciation_list
         }
         for r_i in range(num_rentals):
             sim_data[f"Rental{r_i+1} Equity"] = rentals_equity_lists[r_i]
@@ -278,6 +363,11 @@ def run_simulation(
 
         sim_df = pd.DataFrame(sim_data)
         all_sims.append(sim_df)
+
+        if portfolio_failed:
+            failure_count += 1
+
+    failure_rate = failure_count / n_sims * 100
 
     # Combine all simulations => summary
     combined_df = None
@@ -312,24 +402,24 @@ def run_simulation(
     return {
         "all_sims": all_sims,
         "combined": combined_df,
-        "summary": summary_df
+        "summary": summary_df,
+        "failure_rate": failure_rate
     }
 
 # --------------------------------------------------
 # Streamlit App
 # --------------------------------------------------
 def main():
-    st.set_page_config(page_title="Multiple Rentals + Luxury Expense (No Land)", layout="wide")
-    st.title("Multiple Rentals with Discrete Sales, Luxury Expense, & Stock Only")
+    st.set_page_config(page_title="Retirement Portfolio Simulator", layout="wide")
+    st.title("Retirement Portfolio Simulator")
+    st.subheader("Comprehensive Analysis of Stocks, Real Estate, and Retirement Planning")
     
     st.markdown("""
-    **Features**:
-    1. **Multiple rental properties** with monthly mortgage amortization, discrete sale, net rental cash flow => added to **stocks**.
-    2. **Single asset class**: **Stocks** (no land).
-    3. **One-time luxury expense** in a specified year, subtracting from stocks.
-    4. **Detailed plots** for each rental's mortgage balance & equity.
-
-    Adjust the sidebars and click "Run Simulation" to see the results.
+    This simulator helps you model your retirement portfolio including:
+    - 📈 Stock investments with dividends and volatility
+    - 🏠 Primary residence with mortgage amortization
+    - 🏢 Multiple rental properties with cash flow analysis
+    - 💰 Retirement withdrawals with inflation adjustment
     """)
 
     # ---------- SIDEBAR ----------
@@ -515,6 +605,39 @@ def main():
             "sale_year": rental_sale_year
         })
 
+    # Primary Residence
+    st.sidebar.header("Primary Residence")
+    primary_residence_value = st.sidebar.number_input(
+        "Primary Residence Value", 
+        0, 10_000_000, 300_000, step=1_000,
+        help="The current market value of your primary residence."
+    )
+    primary_mortgage_balance = st.sidebar.number_input(
+        "Primary Mortgage Balance", 
+        0, 10_000_000, 150_000, step=1_000,
+        help="The remaining balance on the mortgage for your primary residence."
+    )
+    primary_mortgage_interest_rate = st.sidebar.slider(
+        "Primary Mortgage Rate", 
+        0.0, 0.2, 0.04, 0.005,
+        help="The annual interest rate on the mortgage for your primary residence."
+    )
+    primary_mortgage_years_left = st.sidebar.number_input(
+        "Years Left on Primary Mortgage", 
+        0, 40, 25, step=1,
+        help="The number of years remaining on the mortgage for your primary residence."
+    )
+    primary_appreciation_mean = st.sidebar.slider(
+        "Primary Residence Appreciation Mean", 
+        0.0, 0.2, 0.03, 0.01,
+        help="The average annual appreciation rate of your primary residence's value."
+    )
+    primary_appreciation_std = st.sidebar.slider(
+        "Primary Residence Appreciation StdDev", 
+        0.0, 0.5, 0.1, 0.01,
+        help="The standard deviation of your primary residence's annual appreciation rate."
+    )
+
     # Luxury Expense
     st.sidebar.header("Luxury Expense (Replaces Land)")
     luxury_expense_amount = st.sidebar.number_input(
@@ -527,6 +650,23 @@ def main():
         0, 100, 0, step=1,
         help="The year in which you plan to incur the luxury expense."
     )
+
+    # Add inflation rate input
+    st.sidebar.header("Economic Parameters")
+    inflation_rate = st.sidebar.slider(
+        "Inflation Rate", 
+        0.01, 0.10, 0.03, 0.001,
+        help="Annual inflation rate used to adjust retirement withdrawals."
+    )
+
+    # Add warnings about market assumptions
+    st.sidebar.markdown("""
+    ⚠️ **Important Notes:**
+    - Past performance does not guarantee future returns
+    - The default 7% return assumption is before inflation
+    - Consider using more conservative estimates
+    - Higher volatility early in retirement can significantly impact outcomes
+    """)
 
     if st.button("Run Simulation"):
         with st.spinner("Simulating..."):
@@ -545,18 +685,43 @@ def main():
                 annual_withdrawal_stocks,
                 # Rentals
                 rentals_data,
+                # Primary Residence
+                primary_residence_value,
+                primary_mortgage_balance,
+                primary_mortgage_interest_rate,
+                primary_mortgage_years_left,
+                primary_appreciation_mean,
+                primary_appreciation_std,
                 # Luxury
                 luxury_expense_amount,
-                luxury_expense_year
+                luxury_expense_year,
+                inflation_rate=inflation_rate
             )
         
         st.success("Simulation Complete!")
+
+        # Display failure rate at the top
+        failure_rate = results["failure_rate"]
+        st.error(f"Portfolio Failure Rate: {failure_rate:.1f}%")
+        st.markdown("""
+        **Portfolio Failure** means the simulation couldn't maintain the desired 
+        withdrawal rate adjusted for inflation. A failure rate above 5% suggests 
+        the plan may be too risky.
+        """)
+
+        # Net Worth Components (Stacked) - moved to top
+        st.subheader("Total Net Worth Components Over Time")
         summary_df = results["summary"]
-        st.subheader("Summary of Simulations (Mean / Median / 10th / 90th)")
-        st.dataframe(summary_df)
+        fig_components = px.area(summary_df, x="Year", 
+            y=["Stock Value Median", "Primary Residence Equity Median"] + 
+              [f"Rental{i+1} Equity Median" for i in range(num_rentals)],
+            title="Net Worth Components (Median)",
+            labels={"value": "Value ($)", "variable": "Component"}
+        )
+        st.plotly_chart(fig_components, use_container_width=True)
 
         # Plot: Stock Value
-        st.subheader("Stock Value Over Time")
+        st.subheader("Stock Portfolio Value Over Time")
         fig_stock = px.line(summary_df, x="Year", y="Stock Value Median", title="Stock Value (Median, 10th-90th)")
         fig_stock.add_traces(px.line(summary_df, x="Year", y="Stock Value 10th").data)
         fig_stock.add_traces(px.line(summary_df, x="Year", y="Stock Value 90th").data)
@@ -566,6 +731,23 @@ def main():
         fig_stock.update_traces(name='90th percentile', selector=dict(name='Stock Value 90th'))
         fig_stock.update_traces(name='Median', selector=dict(name='Stock Value Median'))
         st.plotly_chart(fig_stock, use_container_width=True)
+
+        # Plot: Primary Residence Equity
+        st.subheader("Primary Residence Equity Over Time")
+        fig_primary_residence = px.line(summary_df, x="Year", y="Primary Residence Equity Median", title="Primary Residence Equity (Median, 10th-90th)")
+        fig_primary_residence.add_traces(px.line(summary_df, x="Year", y="Primary Residence Equity 10th").data)
+        fig_primary_residence.add_traces(px.line(summary_df, x="Year", y="Primary Residence Equity 90th").data)
+        fig_primary_residence.data[1].update(fill=None)
+        fig_primary_residence.data[2].update(fill='tonexty', fillcolor='rgba(0,100,80,0.2)')
+        fig_primary_residence.update_traces(name='10th percentile', selector=dict(name='Primary Residence Equity 10th'))
+        fig_primary_residence.update_traces(name='90th percentile', selector=dict(name='Primary Residence Equity 90th'))
+        fig_primary_residence.update_traces(name='Median', selector=dict(name='Primary Residence Equity Median'))
+        st.plotly_chart(fig_primary_residence, use_container_width=True)
+
+        # Plot: Stock Contributions vs Appreciation
+        st.subheader("Stock Contributions vs Appreciation Over Time")
+        fig_stock_breakdown = px.line(summary_df, x="Year", y=["Stock Contributions Median", "Stock Appreciation Median"], title="Stock Contributions vs Appreciation")
+        st.plotly_chart(fig_stock_breakdown, use_container_width=True)
 
         # Detailed Rental Plots
         num_r = len(rentals_data)
@@ -601,16 +783,19 @@ def main():
                 fig_mort.update_traces(name='Median', selector=dict(name=f"{r_label_mort} Median"))
                 st.plotly_chart(fig_mort, use_container_width=True)
 
-        st.markdown("""
-        ### Model Recap
-        - **Stocks** only: Gains, dividends, and withdrawals. If the withdrawal or luxury expense is bigger than the stock balance, it depletes to zero.
-        - **Rentals**:
-          - Monthly mortgage amortization + random appreciation.
-          - **Net rental cash flow** (if positive) => added to stocks each year.
-          - **Discrete sale** in the user-chosen year => proceeds go to stocks.
-        - **Luxury Expense**: One-time outflow from stocks in the specified year.
+        # Move summary table to bottom
+        st.subheader("Detailed Simulation Results")
+        st.markdown("Complete simulation results showing mean, median, and percentile values for all metrics:")
+        st.dataframe(summary_df)
 
-        Customize further to handle negative cash flows from rentals, advanced taxes, or correlations. Enjoy!
+        # Final recap
+        st.markdown("""
+        ### Key Assumptions and Notes
+        - Stock returns include both capital appreciation and dividends
+        - Property values are adjusted for mortgage paydown and appreciation
+        - All withdrawals are adjusted for inflation
+        - Rental income (positive cash flow) is reinvested in stocks
+        - The simulation accounts for taxes on dividends, rental income, and capital gains
         """)
 
 
