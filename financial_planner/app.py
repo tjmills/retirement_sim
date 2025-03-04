@@ -13,8 +13,9 @@ from plotly import graph_objects as go
 # -----------------------------------------------
 def standard_mortgage_payment(principal, annual_interest_rate, mortgage_years):
     """
-    Computes the monthly payment for a standard amortizing mortgage
-    with a fixed rate and remaining term using the standard formula.
+    Computes the monthly payment for a standard amortizing mortgage.
+    Returns 0 if principal, mortgage_years, or a negative rate is provided.
+    In a zero-interest scenario, returns principal divided by the number of months.
     """
     if principal <= 0 or mortgage_years <= 0 or annual_interest_rate < 0:
         return 0.0
@@ -22,12 +23,12 @@ def standard_mortgage_payment(principal, annual_interest_rate, mortgage_years):
     monthly_rate = annual_interest_rate / 12.0
     n_months = mortgage_years * 12
 
-    if monthly_rate == 0 or n_months == 0:
-        return 0.0  # e.g., interest-free or no term left
+    if monthly_rate == 0:
+        return principal / n_months
 
-    # Payment = P * [r(1+r)^n] / [(1+r)^n - 1]
     payment = principal * (monthly_rate * (1 + monthly_rate) ** n_months) / ((1 + monthly_rate) ** n_months - 1)
     return payment
+
 
 # -----------------------------------------------
 # Rental Update (Monthly)
@@ -89,7 +90,7 @@ def update_rental_property_monthly(rental, year_index=0):
     # 6) Depreciation reduces taxable income
     taxable_income = net_operating_income - annual_depreciation
     if taxable_income < 0:
-        taxable_income = 0.0  # ignoring negative carry-forward
+        taxable_income = 0.0
 
     # 7) Pay rental income tax
     rental_income_tax = taxable_income * rental_income_tax_rate
@@ -128,30 +129,24 @@ def simulate_stock(
     """
     One-year update for taxable stock portfolio with optional inflation-adjusted withdrawals.
     """
-    # Adjust withdrawal for inflation if needed
     if inflation_adjusted_withdrawal and current_year > 0:
         withdrawal *= (1 + inflation_rate) ** current_year
 
-    # Withdraw (with check for sufficient funds)
     if withdrawal > current_stock_value:
         withdrawal = current_stock_value
     current_stock_value -= withdrawal
-
-    # Add annual contribution
     current_stock_value += stock_annual_contribution
 
-    # Dividends (after tax)
     dividends = current_stock_value * dividend_yield
     dividends_after_tax = dividends * (1 - dividend_tax_rate)
     current_stock_value += dividends_after_tax
 
-    # Apply random annual return
     annual_return = np.random.normal(loc=expected_return, scale=volatility)
     current_stock_value *= (1 + annual_return)
 
     if current_stock_value < 0:
         current_stock_value = 0
-    
+
     return current_stock_value, withdrawal
 
 # -----------------------------------------------
@@ -162,7 +157,7 @@ def calculate_social_security(birth_year, retirement_age, annual_income):
     Rough estimation of social security benefits based on retirement age and income.
     """
     full_retirement_age = 67 if birth_year >= 1960 else 66
-    monthly_benefit_at_full = min(annual_income * 0.4, 3895)  # Cap at max benefit
+    monthly_benefit_at_full = min(annual_income * 0.4, 3895)
     
     if retirement_age < full_retirement_age:
         reduction = 0.0625 * (full_retirement_age - retirement_age)
@@ -180,8 +175,8 @@ def estimate_healthcare_costs(current_age, retirement_age, life_expectancy):
     """
     Estimates healthcare costs in retirement including Medicare premiums and out-of-pocket.
     """
-    base_annual_cost = 12000  # Average cost for a 65-year-old
-    inflation_rate = 0.05  # Healthcare inflation rate
+    base_annual_cost = 12000
+    inflation_rate = 0.05
     costs = []
     for age in range(retirement_age, life_expectancy + 1):
         year = age - retirement_age
@@ -269,10 +264,10 @@ def analyze_asset_allocations(initial_balance, years, n_sims=1000):
     Analyzes different stock/bond allocations using Monte Carlo simulation.
     """
     allocations = [
-        (100, 0),  # 100% stocks
-        (80, 20),  # 80/20
-        (60, 40),  # 60/40
-        (40, 60),  # 40/60
+        (100, 0),
+        (80, 20),
+        (60, 40),
+        (40, 60),
     ]
     
     results = []
@@ -310,16 +305,14 @@ def analyze_asset_allocations(initial_balance, years, n_sims=1000):
 # Main Simulation Function
 # -----------------------------------------------
 def run_simulation(
-    # Required parameters
     birth_year,
     retirement_age,
     life_expectancy,
     annual_income,
-    annual_budget,  # Annual budget derived from monthly expenses
+    annual_budget,
     tax_deferred_balance,
     roth_balance,
     n_sims,
-    # Taxable Investment parameters
     stock_initial,
     stock_annual_contribution,
     stock_expected_return,
@@ -328,19 +321,14 @@ def run_simulation(
     dividend_yield,
     dividend_tax_rate,
     withdrawal,
-    # Rental properties
     rentals_data,
-    # Primary Residence parameters
     primary_residence_value,
     primary_mortgage_balance,
     primary_mortgage_interest_rate,
     primary_mortgage_years_left,
     primary_appreciation_mean,
     primary_appreciation_std,
-    # Luxury Expense
-    luxury_expense_amount,
-    luxury_expense_year,
-    # Optional parameters
+    luxury_expenses,
     inflation_rate=0.03,
     healthcare_inflation=0.05
 ):
@@ -352,6 +340,11 @@ def run_simulation(
       - Roth account
       - Primary residence equity
       - Rental property equity
+
+    Rental properties are handled as follows:
+      - If purchase_year == 0, the property is assumed to be already purchased.
+      - For purchase_year > 0, at the simulation year matching the purchase_year,
+        the down payment is deducted from the stock portfolio and the property is purchased.
     """
     current_year = date.today().year
     current_age = current_year - birth_year
@@ -363,33 +356,29 @@ def run_simulation(
     failure_count = 0
     num_rentals = len(rentals_data)
     
-    # Social Security and Healthcare estimates
     annual_ss_benefit = calculate_social_security(birth_year, retirement_age, annual_income)
     healthcare_costs = estimate_healthcare_costs(current_age, retirement_age, life_expectancy)
     
     phase_labels = ['Accumulation' if year < years_to_retirement else 'Retirement' for year in range(total_years)]
     
-    # Run each simulation iteration
+    # For rentals with purchase_year == 0, assume they are already owned.
+    my_rentals = [rd.copy() for rd in rentals_data if rd["purchase_year"] == 0]
+    
     for sim_i in range(n_sims):
-        # Initialize accounts
         current_stock_value = stock_initial
-        total_contributions = 0.0  # For taxable account tracking
+        total_contributions = 0.0
         current_tax_deferred = tax_deferred_balance
         current_roth = roth_balance
         
-        # Initialize primary residence
-        current_primary_residence_value = primary_residence_value
-        current_primary_mortgage_balance = primary_mortgage_balance
         primary_monthly_payment = standard_mortgage_payment(
             principal=primary_mortgage_balance,
             annual_interest_rate=primary_mortgage_interest_rate,
             mortgage_years=primary_mortgage_years_left
         )
         
-        # Copy rental properties
-        my_rentals = [rd.copy() for rd in rentals_data]
+        # Start with already-owned rentals
+        sim_rentals = my_rentals.copy()
         
-        # Lists to track annual results
         year_list = []
         stock_vals = []
         tax_deferred_vals = []
@@ -398,9 +387,13 @@ def run_simulation(
         primary_residence_equity_list = []
         stock_contributions_list = []
         stock_appreciation_list = []
-        rentals_equity_lists = [ [] for _ in range(num_rentals) ]
-        rentals_mortgage_lists = [ [] for _ in range(num_rentals) ]
-        rentals_cashflow_lists = [ [] for _ in range(num_rentals) ]
+        
+        rentals_equity_lists = [[] for _ in range(len(rentals_data))]
+        rentals_mortgage_lists = [[] for _ in range(len(rentals_data))]
+        rentals_cashflow_lists = [[] for _ in range(len(rentals_data))]
+        
+        rental_index_map = {rd["description"]: i for i, rd in enumerate(rentals_data)}
+        
         actual_withdrawals = []
         portfolio_failed = False
 
@@ -409,15 +402,33 @@ def run_simulation(
             year_label = year + 1
             is_retirement = (year >= years_to_retirement)
             
-            # 1) Update Rental Properties
-            for r_i, rental in enumerate(my_rentals):
+            # Check for new rental purchases this year (purchase_year > 0)
+            for rental in rentals_data:
+                if rental["purchase_year"] == year_label:
+                    downpayment = rental["downpayment"]
+                    # Always deduct the downpayment from the stock portfolio (even if it goes negative)
+                    current_stock_value -= downpayment
+                    new_rental = rental.copy()
+                    new_rental["mortgage_balance"] = rental["cost_basis"] - downpayment
+                    new_rental["property_value"] = rental["cost_basis"]
+                    sim_rentals.append(new_rental)
+            
+            # Handle luxury expenses
+            for expense in luxury_expenses:
+                if expense["purchase_year"] == year_label:
+                    expense_amount = expense["amount"]
+                    current_stock_value -= expense_amount
+            
+            for r_i in range(len(rentals_data)):
+                rentals_equity_lists[r_i].append(0)
+                rentals_mortgage_lists[r_i].append(0)
+                rentals_cashflow_lists[r_i].append(0)
+            
+            for rental in sim_rentals:
                 if rental["property_value"] <= 0:
-                    rentals_equity_lists[r_i].append(0)
-                    rentals_mortgage_lists[r_i].append(0)
-                    rentals_cashflow_lists[r_i].append(0)
                     continue
+                r_i = rental_index_map[rental["description"]]
                 updated_r, net_cf = update_rental_property_monthly(rental, year_index=year)
-                my_rentals[r_i] = updated_r
                 if net_cf > 0:
                     current_stock_value += net_cf
                 sale_year = updated_r["sale_year"]
@@ -429,18 +440,11 @@ def run_simulation(
                     updated_r["property_value"] = 0
                     updated_r["mortgage_balance"] = 0
                     updated_r["cost_basis"] = 0
-                    my_rentals[r_i] = updated_r
                 eq = max(updated_r["property_value"] - updated_r["mortgage_balance"], 0)
-                rentals_equity_lists[r_i].append(eq)
-                rentals_mortgage_lists[r_i].append(updated_r["mortgage_balance"])
-                rentals_cashflow_lists[r_i].append(net_cf)
+                rentals_equity_lists[r_i][-1] = eq
+                rentals_mortgage_lists[r_i][-1] = updated_r["mortgage_balance"]
+                rentals_cashflow_lists[r_i][-1] = net_cf
             
-            # 2) Luxury Expense (if applicable)
-            if (luxury_expense_amount > 0) and (luxury_expense_year == year_label):
-                expense = min(luxury_expense_amount, current_stock_value)
-                current_stock_value -= expense
-            
-            # 3) Retirement Income & Expenses
             if is_retirement:
                 inflation_adjusted_budget = annual_budget * ((1 + inflation_rate) ** (year - years_to_retirement))
                 ss_income = annual_ss_benefit * ((1 + inflation_rate) ** (year - years_to_retirement))
@@ -448,12 +452,10 @@ def run_simulation(
                 if (year - years_to_retirement) < len(healthcare_costs):
                     healthcare_cost = healthcare_costs[year - years_to_retirement]
                     current_stock_value -= healthcare_cost
-                # Process RMD from tax-deferred account if age >= 72
                 if current_age >= 72 and current_tax_deferred > 0:
                     rmd = calculate_rmd(current_age, current_tax_deferred)
                     current_tax_deferred -= rmd
-                    current_stock_value += rmd * 0.8  # 20% tax assumed on withdrawn RMD
-            # 4) Update Taxable Stock Account
+                    current_stock_value += rmd * 0.8
             stock_contribution = stock_annual_contribution if not is_retirement else 0
             stock_withdrawal = inflation_adjusted_budget if is_retirement else 0
             current_stock_value, actual_withdrawal = simulate_stock(
@@ -475,36 +477,27 @@ def run_simulation(
             total_contributions += stock_contribution
             total_appreciation = current_stock_value - total_contributions
             
-            # 5) Update Tax-Deferred and Roth Accounts
             r_return = np.random.normal(stock_expected_return, stock_volatility)
-            if not is_retirement:
-                current_tax_deferred *= (1 + r_return)
-                current_roth *= (1 + r_return)
-            else:
-                current_tax_deferred *= (1 + r_return)
-                current_roth *= (1 + r_return)
-                # RMD already processed above for tax-deferred
+            current_tax_deferred *= (1 + r_return)
+            current_roth *= (1 + r_return)
             
-            # 6) Update Primary Residence
             annual_appreciation = np.random.normal(loc=primary_appreciation_mean, scale=primary_appreciation_std)
-            current_primary_residence_value *= (1 + annual_appreciation)
+            current_primary_residence_value = primary_residence_value * (1 + annual_appreciation)
             monthly_interest_rate = primary_mortgage_interest_rate / 12.0
             for _ in range(12):
-                interest_for_month = current_primary_mortgage_balance * monthly_interest_rate
+                interest_for_month = primary_mortgage_balance * monthly_interest_rate
                 principal_for_month = primary_monthly_payment - interest_for_month
                 if principal_for_month < 0:
                     principal_for_month = 0
                     interest_for_month = primary_monthly_payment
-                if principal_for_month > current_primary_mortgage_balance:
-                    principal_for_month = current_primary_mortgage_balance
-                current_primary_mortgage_balance -= principal_for_month
+                if principal_for_month > primary_mortgage_balance:
+                    principal_for_month = primary_mortgage_balance
+                primary_mortgage_balance -= principal_for_month
             
-            # 7) Total Net Worth Calculation (all accounts included)
-            rental_equity = sum(max(r["property_value"] - r["mortgage_balance"], 0) for r in my_rentals)
-            primary_equity = max(current_primary_residence_value - current_primary_mortgage_balance, 0)
+            rental_equity = sum(max(r["property_value"] - r["mortgage_balance"], 0) for r in sim_rentals)
+            primary_equity = max(current_primary_residence_value - primary_mortgage_balance, 0)
             total_net_worth = current_stock_value + current_tax_deferred + current_roth + rental_equity + primary_equity
             
-            # Record values for the year
             year_list.append(year_label)
             stock_vals.append(current_stock_value)
             tax_deferred_vals.append(current_tax_deferred)
@@ -514,7 +507,6 @@ def run_simulation(
             stock_contributions_list.append(total_contributions)
             stock_appreciation_list.append(total_appreciation)
         
-        # Build simulation DataFrame (including new accounts)
         sim_data = {
             "Year": year_list,
             "Taxable Stock Value": stock_vals,
@@ -537,7 +529,6 @@ def run_simulation(
     
     failure_rate = failure_count / n_sims * 100
 
-    # Combine simulations into a summary DataFrame
     combined_df = None
     for i, df_i in enumerate(all_sims):
         rename_map = {col: f"{col} {i}" for col in df_i.columns if col != "Year"}
@@ -798,16 +789,11 @@ def main():
     # ---------- SIDEBAR ----------
     st.sidebar.title("Your Information")
     
-    # 1. Personal Information
     st.sidebar.header("1️⃣ Personal Details")
-    birth_year = st.sidebar.number_input("Birth Year", 1940, 2000, 1970,
-                                          help="Used to calculate Social Security benefits and RMDs")
-    retirement_age = st.sidebar.number_input("Planned Retirement Age", 55, 75, 65,
-                                               help="Age at which you plan to retire")
-    life_expectancy = st.sidebar.number_input("Life Expectancy", retirement_age, 100, 90,
-                                                help="Plan through this age for safety")
-    annual_income = st.sidebar.number_input("Current Annual Income", 0, 500_000, 80_000,
-                                             help="Used for Social Security calculation")
+    birth_year = st.sidebar.number_input("Birth Year", 1940, 2000, 1970, help="Used to calculate Social Security benefits and RMDs")
+    retirement_age = st.sidebar.number_input("Planned Retirement Age", 55, 75, 65, help="Age at which you plan to retire")
+    life_expectancy = st.sidebar.number_input("Life Expectancy", retirement_age, 100, 90, help="Plan through this age for safety")
+    annual_income = st.sidebar.number_input("Current Annual Income", 0, 500_000, 80_000, help="Used for Social Security calculation")
     
     current_year = date.today().year
     current_age = current_year - birth_year
@@ -822,7 +808,6 @@ def main():
     🌅 Years in retirement: {years_in_retirement}
     """)
     
-    # 2. Monthly Budget
     st.sidebar.header("2️⃣ Monthly Expenses")
     with st.sidebar.expander("Enter Monthly Budget", expanded=False):
         monthly_expenses = {
@@ -838,78 +823,70 @@ def main():
         st.info(f"Total Monthly Expenses: ${total_monthly:,.2f}")
         st.info(f"Annual Expenses: ${total_monthly*12:,.2f}")
     
-    # 3. Current Assets
     st.sidebar.header("3️⃣ Current Assets")
     with st.sidebar.expander("Retirement Accounts", expanded=True):
-        tax_deferred_balance = st.number_input("Tax-Deferred Balance (401k, IRA)", 0, 10_000_000, 100_000,
-                                                help="Current balance in traditional retirement accounts")
-        roth_balance = st.number_input("Roth Balance", 0, 10_000_000, 50_000,
-                                       help="Current balance in Roth accounts")
-        stock_initial = st.number_input("Taxable Investment Balance", 0, 10_000_000, 50_000, step=1_000,
-                                        help="Current balance in taxable investment accounts")
+        tax_deferred_balance = st.number_input("Tax-Deferred Balance (401k, IRA)", 0, 10_000_000, 100_000, help="Current balance in traditional retirement accounts")
+        roth_balance = st.number_input("Roth Balance", 0, 10_000_000, 50_000, help="Current balance in Roth accounts")
+        stock_initial = st.number_input("Taxable Investment Balance", 0, 10_000_000, 50_000, step=1_000, help="Current balance in taxable investment accounts")
     
-    # Primary Residence
     with st.sidebar.expander("Primary Residence", expanded=True):
-        primary_residence_value = st.number_input("Home Value", 0, 10_000_000, 300_000,
-                                                  help="Current market value of your primary residence")
-        primary_mortgage_balance = st.number_input("Mortgage Balance", 0, 10_000_000, 150_000,
-                                                   help="Remaining balance on your mortgage")
-        primary_mortgage_interest_rate = st.slider("Mortgage Rate", 0.0, 0.2, 0.04, 0.005,
-                                                   help="Annual interest rate on your mortgage")
-        primary_mortgage_years_left = st.number_input("Years Left on Mortgage", 0, 40, 25,
-                                                      help="Remaining years on your mortgage term")
-        primary_appreciation_mean = st.slider("Home Appreciation Rate", 0.0, 0.2, 0.03, 0.01,
-                                              help="Expected annual appreciation rate for your home")
-        primary_appreciation_std = st.slider("Home Appreciation Volatility", 0.0, 0.5, 0.1, 0.01,
-                                             help="Standard deviation of annual home appreciation")
+        primary_residence_value = st.number_input("Home Value", 0, 10_000_000, 300_000, help="Current market value of your primary residence")
+        primary_mortgage_balance = st.number_input("Mortgage Balance", 0, 10_000_000, 150_000, help="Remaining balance on your mortgage")
+        primary_mortgage_interest_rate = st.slider("Mortgage Rate", 0.0, 0.2, 0.04, 0.005, help="Annual interest rate on your mortgage")
+        primary_mortgage_years_left = st.number_input("Years Left on Mortgage", 0, 40, 25, help="Remaining years on your mortgage term")
+        primary_appreciation_mean = st.slider("Home Appreciation Rate", 0.0, 0.2, 0.03, 0.01, help="Expected annual appreciation rate for your home")
+        primary_appreciation_std = st.slider("Home Appreciation Volatility", 0.0, 0.5, 0.1, 0.01, help="Standard deviation of annual home appreciation")
     
-    # Rental Properties
     with st.sidebar.expander("Rental Properties", expanded=True):
-        num_rentals = st.number_input("Number of Rental Properties", 0, 5, 0,
-                                      help="How many rental properties do you own?")
+        num_rentals = st.number_input("Number of Rental Properties", 0, 5, 0, help="How many rental properties do you own?")
         rentals_data = []
-        for i in range(num_rentals):
-            st.markdown(f"**Rental Property #{i+1}**")
+        for rental_idx in range(num_rentals):
+            st.markdown(f"**Rental Property #{rental_idx+1}**")
             rental_data = {
-                "property_value": st.number_input(f"Property Value (Rental {i+1})", 0, 10_000_000, 200_000, step=1_000,
-                                                  help="Current market value of the rental property"),
-                "mortgage_balance": st.number_input(f"Mortgage Balance (Rental {i+1})", 0, 10_000_000, 120_000, step=1_000,
-                                                    help="Remaining balance on the mortgage"),
-                "mortgage_interest_rate": st.slider(f"Mortgage Rate (Rental {i+1})", 0.0, 0.2, 0.04, 0.005,
-                                                    help="Annual interest rate on the mortgage"),
-                "monthly_rent_base": st.number_input(f"Monthly Rent (Rental {i+1})", 0, 50_000, 1500, step=100,
-                                                     help="Current monthly rent charged"),
-                "cost_basis": st.number_input(f"Cost Basis (Rental {i+1})", 0, 2_000_000, 180_000, step=1_000,
-                                              help="Original purchase price plus improvements"),
-                "sale_year": st.number_input(f"Planned Sale Year (Rental {i+1})", 0, 100, 0, step=1,
-                                             help="Year you plan to sell (0 = no plan)"),
-                "rental_cap_gains_tax": st.slider(f"Capital Gains Tax Rate (Rental {i+1})", 0.0, 0.5, 0.15, 0.01,
-                                                  help="Expected tax rate on sale profits"),
-                "property_tax_rate": st.slider(f"Property Tax Rate (Rental {i+1})", 0.0, 0.05, 0.01, 0.001,
-                                               help="Annual property tax as % of value"),
-                "maintenance_rate": st.slider(f"Maintenance Rate (Rental {i+1})", 0.0, 0.05, 0.01, 0.001,
-                                              help="Annual maintenance as % of value"),
-                "vacancy_rate": st.slider(f"Vacancy Rate (Rental {i+1})", 0.0, 1.0, 0.05, 0.01,
-                                          help="Expected vacancy rate"),
-                "rental_income_tax_rate": st.slider(f"Rental Income Tax Rate (Rental {i+1})", 0.0, 0.5, 0.2, 0.01,
-                                                    help="Tax rate on rental income"),
-                "rent_inflation": st.slider(f"Rent Inflation (Rental {i+1})", 0.0, 0.1, 0.02, 0.01,
-                                            help="Expected annual increase in rent"),
-                "app_mean": st.slider(f"Appreciation Rate (Rental {i+1})", 0.0, 0.2, 0.03, 0.01,
-                                      help="Expected annual property appreciation"),
-                "app_std": st.slider(f"Appreciation Volatility (Rental {i+1})", 0.0, 0.5, 0.1, 0.01,
-                                     help="Standard deviation of appreciation")
+                "description": st.text_input(f"Property Description {rental_idx+1}", value=f"Rental {rental_idx+1}",
+                                           help="Description or address of the property", key=f"rental_desc_{rental_idx}"),
+                "purchase_year": st.number_input(f"Purchase Year {rental_idx+1}", 0, total_years, 0,
+                                               help="Year to purchase (0 = already owned)", key=f"rental_purchase_year_{rental_idx}"),
+                "property_value": st.number_input(f"Property Value (Rental {rental_idx+1})", 0, 10_000_000, 200_000, step=1_000,
+                                                help="Current market value of the rental property", key=f"rental_value_{rental_idx}"),
+                "downpayment": st.number_input(f"Downpayment (Rental {rental_idx+1})", 0, 2_000_000, 40_000, step=1_000,
+                                             help="Downpayment amount (will be deducted from stocks if purchased in future)", key=f"rental_downpayment_{rental_idx}"),
+                "cost_basis": st.number_input(f"Purchase Price (Rental {rental_idx+1})", 0, 2_000_000, 180_000, step=1_000,
+                                            help="Total purchase price of the property", key=f"rental_basis_{rental_idx}"),
+                "mortgage_balance": st.number_input(f"Mortgage Balance (Rental {rental_idx+1})", 0, 10_000_000, 120_000, step=1_000,
+                                                  help="Remaining balance on the mortgage", key=f"rental_mortgage_{rental_idx}"),
+                "mortgage_interest_rate": st.slider(f"Mortgage Rate (Rental {rental_idx+1})", 0.0, 0.2, 0.04, 0.005,
+                                                  help="Annual interest rate on the mortgage", key=f"rental_rate_{rental_idx}"),
+                "monthly_rent_base": st.number_input(f"Monthly Rent (Rental {rental_idx+1})", 0, 50_000, 1500, step=100,
+                                                   help="Current monthly rent charged", key=f"rental_rent_{rental_idx}"),
+                "sale_year": st.number_input(f"Planned Sale Year (Rental {rental_idx+1})", 0, 100, 0, step=1,
+                                           help="Year you plan to sell (0 = no plan)", key=f"rental_sale_{rental_idx}"),
+                "rental_cap_gains_tax": st.slider(f"Capital Gains Tax Rate (Rental {rental_idx+1})", 0.0, 0.5, 0.15, 0.01,
+                                                help="Expected tax rate on sale profits", key=f"rental_capgains_{rental_idx}"),
+                "property_tax_rate": st.slider(f"Property Tax Rate (Rental {rental_idx+1})", 0.0, 0.05, 0.01, 0.001,
+                                             help="Annual property tax as % of value", key=f"rental_proptax_{rental_idx}"),
+                "maintenance_rate": st.slider(f"Maintenance Rate (Rental {rental_idx+1})", 0.0, 0.05, 0.01, 0.001,
+                                            help="Annual maintenance as % of value", key=f"rental_maint_{rental_idx}"),
+                "vacancy_rate": st.slider(f"Vacancy Rate (Rental {rental_idx+1})", 0.0, 1.0, 0.05, 0.01,
+                                        help="Expected vacancy rate", key=f"rental_vacancy_{rental_idx}"),
+                "rental_income_tax_rate": st.slider(f"Rental Income Tax Rate (Rental {rental_idx+1})", 0.0, 0.5, 0.2, 0.01,
+                                                  help="Tax rate on rental income", key=f"rental_tax_{rental_idx}"),
+                "rent_inflation": st.slider(f"Rent Inflation (Rental {rental_idx+1})", 0.0, 0.1, 0.02, 0.01,
+                                          help="Expected annual increase in rent", key=f"rental_inflation_{rental_idx}"),
+                "app_mean": st.slider(f"Appreciation Rate (Rental {rental_idx+1})", 0.0, 0.2, 0.03, 0.01,
+                                    help="Expected annual property appreciation", key=f"rental_appmean_{rental_idx}"),
+                "app_std": st.slider(f"Appreciation Volatility (Rental {rental_idx+1})", 0.0, 0.5, 0.1, 0.01,
+                                   help="Standard deviation of appreciation", key=f"rental_appstd_{rental_idx}")
             }
             monthly_payment = standard_mortgage_payment(
                 principal=rental_data["mortgage_balance"],
                 annual_interest_rate=rental_data["mortgage_interest_rate"],
-                mortgage_years=30  # Assume 30-year mortgage for rentals
+                mortgage_years=30
             )
             rental_data["monthly_payment"] = monthly_payment
             rental_data["annual_depreciation"] = rental_data["cost_basis"] / 27.5
             rentals_data.append(rental_data)
     
-    # 4. Investment Strategy
     st.sidebar.header("4️⃣ Investment Strategy")
     with st.sidebar.expander("Contributions & Withdrawals", expanded=True):
         stock_annual_contribution = st.number_input("Annual Investment Contribution", 0, 1_000_000, 10_000, step=1_000,
@@ -933,7 +910,6 @@ def main():
         dividend_yield = st.slider("Dividend Yield", 0.0, 0.1, 0.02, 0.01,
                                    help="Expected annual dividend yield")
     
-    # 5. Tax & Economic Factors
     st.sidebar.header("5️⃣ Tax & Economic Factors")
     with st.sidebar.expander("Tax & Inflation Settings", expanded=False):
         cap_gains_tax_rate = st.slider("Capital Gains Tax Rate", 0.0, 0.5, 0.15, 0.01,
@@ -943,21 +919,25 @@ def main():
         inflation_rate = st.slider("Inflation Rate", 0.01, 0.10, 0.03, 0.001,
                                    help="Expected annual inflation rate")
     
-    # 6. Optional Planning
     st.sidebar.header("6️⃣ Optional Planning")
     with st.sidebar.expander("Future Expenses", expanded=False):
-        luxury_expense_amount = st.number_input("One-time Expense Amount", 0, 5_000_000, 0, step=1_000,
-                                                help="Optional future large expense (e.g., vacation home)")
-        if luxury_expense_amount > 0:
-            luxury_expense_year = st.number_input("Year for Expense", 1, years_to_retirement + years_in_retirement, 1,
-                                                  help="Which year to plan this expense")
-        else:
-            luxury_expense_year = 0
+        num_luxury_expenses = st.number_input("Number of One-time Expenses", 0, 10, 0, help="How many large future expenses to plan for")
+        luxury_expenses = []
+        for expense_idx in range(num_luxury_expenses):
+            st.markdown(f"**One-time Expense #{expense_idx+1}**")
+            expense = {
+                "description": st.text_input(f"Description {expense_idx+1}", value=f"Expense {expense_idx+1}",
+                                           help="Description of the expense (e.g., Vacation Home)", key=f"expense_desc_{expense_idx}"),
+                "amount": st.number_input(f"Expense Amount {expense_idx+1}", 0, 5_000_000, 0, step=1_000,
+                                        help="Amount needed for this expense", key=f"expense_amount_{expense_idx}"),
+                "purchase_year": st.number_input(f"Purchase Year {expense_idx+1}", 1, total_years, 1,
+                                               help="Year when expense will be paid", key=f"expense_purchase_year_{expense_idx}")
+            }
+            if expense["amount"] > 0:
+                luxury_expenses.append(expense)
     
-    # 7. Simulation Settings
     st.sidebar.header("7️⃣ Simulation Settings")
-    n_sims = st.sidebar.number_input("Number of Simulations", 100, 2000, 200,
-                                     help="More simulations = more accurate results but slower")
+    n_sims = st.sidebar.number_input("Number of Simulations", 100, 2000, 200, help="More simulations = more accurate results but slower")
     
     st.sidebar.warning("""
     ⚠️ **Important Notes:**
@@ -967,7 +947,6 @@ def main():
     - Early retirement years have outsized impact
     """)
     
-    # 8. Analysis Options
     st.sidebar.header("8️⃣ Analysis Options")
     show_ss_analysis = st.sidebar.checkbox("Show Social Security Analysis", value=False)
     show_tax_analysis = st.sidebar.checkbox("Show Tax Analysis", value=False)
@@ -975,10 +954,8 @@ def main():
     
     if show_tax_analysis:
         st.sidebar.subheader("Additional Tax Analysis Inputs")
-        pension_income = st.sidebar.number_input("Expected Annual Pension", 0, 200_000, 0,
-                                                 help="Expected annual pension income in retirement")
-        rental_income = st.sidebar.number_input("Expected Annual Rental Income", 0, 200_000, 0,
-                                                help="Expected annual rental income in retirement")
+        pension_income = st.sidebar.number_input("Expected Annual Pension", 0, 200_000, 0, help="Expected annual pension income in retirement")
+        rental_income = st.sidebar.number_input("Expected Annual Rental Income", 0, 200_000, 0, help="Expected annual rental income in retirement")
     
     if 'report_html' not in st.session_state:
         st.session_state.report_html = None
@@ -1016,8 +993,7 @@ def main():
                 primary_mortgage_years_left,
                 primary_appreciation_mean,
                 primary_appreciation_std,
-                luxury_expense_amount,
-                luxury_expense_year,
+                luxury_expenses,
                 inflation_rate,
                 healthcare_inflation=0.05
             )
@@ -1274,6 +1250,33 @@ def main():
         with col2:
             st.download_button("Download Report", data=report_html, file_name="retirement_report.html",
                                mime="text/html", key="download_report")
+
+        if luxury_expenses:
+            st.subheader("Planned One-time Expenses")
+            expense_df = pd.DataFrame(luxury_expenses)
+            expense_df.columns = ['Amount', 'Purchase Year', 'Description']
+            st.dataframe(expense_df.style.format({
+                'Amount': '${:,.2f}'
+            }))
+
+        if num_rentals > 0:
+            st.subheader("Rental Properties Summary")
+            rental_summary = []
+            for i, rental in enumerate(rentals_data):
+                rental_summary.append({
+                    'Description': rental['description'],
+                    'Purchase Year': rental['purchase_year'],
+                    'Current Value': rental['property_value'],
+                    'Mortgage Balance': rental['mortgage_balance'],
+                    'Monthly Rent': rental['monthly_rent_base'],
+                    'Planned Sale': f"Year {rental['sale_year']}" if rental['sale_year'] > 0 else "No plan"
+                })
+            rental_df = pd.DataFrame(rental_summary)
+            st.dataframe(rental_df.style.format({
+                'Current Value': '${:,.2f}',
+                'Mortgage Balance': '${:,.2f}',
+                'Monthly Rent': '${:,.2f}'
+            }))
 
 if __name__ == "__main__":
     main()

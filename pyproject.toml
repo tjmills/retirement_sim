@@ -12,6 +12,11 @@ matplotlib = "*"
 plotly = "*"
 kaleido = "0.2.1"
 
+[tool.poetry.dev-dependencies]
+pytest = "^7.0"
+black = "^23.1"
+flake8 = "^5.0"
+
 [tool.poetry.scripts]
 financial-planner = "financial_planner.gui_app:main"
 
