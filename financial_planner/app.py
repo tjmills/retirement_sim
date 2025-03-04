@@ -29,7 +29,6 @@ def standard_mortgage_payment(principal, annual_interest_rate, mortgage_years):
     payment = principal * (monthly_rate * (1 + monthly_rate) ** n_months) / ((1 + monthly_rate) ** n_months - 1)
     return payment
 
-
 # -----------------------------------------------
 # Rental Update (Monthly)
 # -----------------------------------------------
@@ -302,6 +301,53 @@ def analyze_asset_allocations(initial_balance, years, n_sims=1000):
     return pd.DataFrame(results)
 
 # -----------------------------------------------
+# Future Expenses Validation
+# -----------------------------------------------
+def validate_future_expenses(stock_initial, stock_annual_contribution, luxury_expenses, rentals_data, current_year, years_to_retirement, total_years, assumed_growth=0.05):
+    """
+    Validates that future expenses (luxury expenses and rental downpayments) do not exceed the funds 
+    available when accounting for annual contributions and a simple growth rate.
+    Purchase years are relative to the simulation timeline where:
+    Year 1 = first year of simulation.
+    """
+    expenses_by_year = {}
+    
+    # Add luxury expenses
+    for expense in luxury_expenses:
+        if expense['purchase_year'] > 0:  # Only include future purchases
+            simulation_year = expense['purchase_year']  # Year is relative to simulation
+            expenses_by_year.setdefault(simulation_year, 0)
+            expenses_by_year[simulation_year] += expense['amount']
+    
+    # Add rental purchases (downpayments)
+    for rental in rentals_data:
+        if rental['purchase_year'] > 0:  # Only include future purchases
+            simulation_year = rental['purchase_year']
+            expenses_by_year.setdefault(simulation_year, 0)
+            expenses_by_year[simulation_year] += rental['downpayment']
+    
+    balance = stock_initial
+    # Simulate year by year until the end of the simulation.
+    for year in range(1, total_years + 1):
+        # Grow the balance (simplified with an assumed growth rate)
+        balance *= (1 + assumed_growth)
+        
+        # Add contributions in accumulation phase.
+        if year <= years_to_retirement:
+            balance += stock_annual_contribution
+        
+        # Deduct expenses for this simulation year, if any.
+        if year in expenses_by_year:
+            if expenses_by_year[year] > balance:
+                return False, (
+                    f"Insufficient funds in simulation year {year} (Calendar Year: {current_year + year - 1}) "
+                    f"for expenses. Need ${expenses_by_year[year]:,.2f} but only ${balance:,.2f} available."
+                )
+            balance -= expenses_by_year[year]
+    
+    return True, ""
+
+# -----------------------------------------------
 # Main Simulation Function
 # -----------------------------------------------
 def run_simulation(
@@ -334,17 +380,7 @@ def run_simulation(
 ):
     """
     Enhanced simulation including Social Security, healthcare, and simulation of
-    tax-advantaged accounts (tax-deferred and Roth). The total net worth now includes:
-      - Taxable (stock) account
-      - Tax-deferred account (with RMDs during retirement)
-      - Roth account
-      - Primary residence equity
-      - Rental property equity
-
-    Rental properties are handled as follows:
-      - If purchase_year == 0, the property is assumed to be already purchased.
-      - For purchase_year > 0, at the simulation year matching the purchase_year,
-        the down payment is deducted from the stock portfolio and the property is purchased.
+    tax-advantaged accounts.
     """
     current_year = date.today().year
     current_age = current_year - birth_year
@@ -369,7 +405,11 @@ def run_simulation(
         total_contributions = 0.0
         current_tax_deferred = tax_deferred_balance
         current_roth = roth_balance
-        
+
+        # Create local copies for primary residence variables
+        current_primary_mortgage_balance = primary_mortgage_balance
+        current_primary_value = primary_residence_value
+
         primary_monthly_payment = standard_mortgage_payment(
             principal=primary_mortgage_balance,
             annual_interest_rate=primary_mortgage_interest_rate,
@@ -398,7 +438,7 @@ def run_simulation(
         portfolio_failed = False
 
         for year in range(total_years):
-            current_age = (date.today().year - birth_year) + year
+            current_age = (current_year - birth_year) + year
             year_label = year + 1
             is_retirement = (year >= years_to_retirement)
             
@@ -406,7 +446,7 @@ def run_simulation(
             for rental in rentals_data:
                 if rental["purchase_year"] == year_label:
                     downpayment = rental["downpayment"]
-                    # Always deduct the downpayment from the stock portfolio (even if it goes negative)
+                    # Deduct the downpayment from the stock portfolio
                     current_stock_value -= downpayment
                     new_rental = rental.copy()
                     new_rental["mortgage_balance"] = rental["cost_basis"] - downpayment
@@ -481,21 +521,22 @@ def run_simulation(
             current_tax_deferred *= (1 + r_return)
             current_roth *= (1 + r_return)
             
+            # Update primary residence (compounding value and amortizing mortgage)
             annual_appreciation = np.random.normal(loc=primary_appreciation_mean, scale=primary_appreciation_std)
-            current_primary_residence_value = primary_residence_value * (1 + annual_appreciation)
+            current_primary_value *= (1 + annual_appreciation)
             monthly_interest_rate = primary_mortgage_interest_rate / 12.0
             for _ in range(12):
-                interest_for_month = primary_mortgage_balance * monthly_interest_rate
+                interest_for_month = current_primary_mortgage_balance * monthly_interest_rate
                 principal_for_month = primary_monthly_payment - interest_for_month
                 if principal_for_month < 0:
                     principal_for_month = 0
                     interest_for_month = primary_monthly_payment
-                if principal_for_month > primary_mortgage_balance:
-                    principal_for_month = primary_mortgage_balance
-                primary_mortgage_balance -= principal_for_month
+                if principal_for_month > current_primary_mortgage_balance:
+                    principal_for_month = current_primary_mortgage_balance
+                current_primary_mortgage_balance -= principal_for_month
             
+            primary_equity = max(current_primary_value - current_primary_mortgage_balance, 0)
             rental_equity = sum(max(r["property_value"] - r["mortgage_balance"], 0) for r in sim_rentals)
-            primary_equity = max(current_primary_residence_value - primary_mortgage_balance, 0)
             total_net_worth = current_stock_value + current_tax_deferred + current_roth + rental_equity + primary_equity
             
             year_list.append(year_label)
@@ -965,6 +1006,20 @@ def main():
         run_simulation_button = st.button("Run Simulation")
     
     if run_simulation_button:
+        # Validate expenses before running simulation
+        is_valid, error_message = validate_future_expenses(
+            stock_initial, 
+            stock_annual_contribution,
+            luxury_expenses, 
+            rentals_data,
+            current_year,
+            years_to_retirement,
+            total_years
+        )
+        if not is_valid:
+            st.error(error_message)
+            st.stop()
+            
         monthly_budget = sum(monthly_expenses.values())
         annual_budget = monthly_budget * 12
 
