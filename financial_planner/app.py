@@ -9,6 +9,16 @@ from io import BytesIO
 from plotly import graph_objects as go
 
 # -----------------------------------------------
+# Helper: Safe Formatter for Pandas Styler
+# -----------------------------------------------
+def safe_formatter(fmt):
+    def formatter(x):
+        if x is None or pd.isna(x):
+            return ""
+        return fmt.format(x)
+    return formatter
+
+# -----------------------------------------------
 # Mortgage Payment Formula
 # -----------------------------------------------
 def standard_mortgage_payment(principal, annual_interest_rate, mortgage_years):
@@ -110,13 +120,81 @@ def update_rental_property_monthly(rental, year_index=0):
     return updated_rental, net_rental_cash_flow
 
 # -----------------------------------------------
+# Detailed Rental Cash Flow Breakdown Function
+# -----------------------------------------------
+def calculate_rental_cashflow_breakdown(rental, year_index=0):
+    """
+    Calculates a detailed breakdown of rental property cash flow for a given year.
+    Returns a dictionary with the breakdown.
+    """
+    # Unpack parameters
+    property_value = rental["property_value"]
+    mortgage_balance = rental["mortgage_balance"]
+    annual_interest_rate = rental["mortgage_interest_rate"]
+    monthly_payment = rental["monthly_payment"]
+    monthly_rent_base = rental["monthly_rent_base"]
+    vacancy_rate = rental["vacancy_rate"]
+    property_tax_rate = rental["property_tax_rate"]
+    maintenance_rate = rental["maintenance_rate"]
+    rental_income_tax_rate = rental["rental_income_tax_rate"]
+    annual_depreciation = rental["annual_depreciation"]
+    rent_inflation = rental["rent_inflation"]
+
+    # 1) Calculate current monthly rent and gross annual rent
+    current_monthly_rent = monthly_rent_base * ((1 + rent_inflation) ** year_index)
+    gross_annual_rent = current_monthly_rent * 12 * (1 - vacancy_rate)
+
+    # 2) Calculate property tax and maintenance
+    annual_property_tax = property_value * property_tax_rate
+    annual_maintenance = property_value * maintenance_rate
+
+    # 3) Calculate total mortgage interest over 12 months
+    monthly_interest_rate = annual_interest_rate / 12.0
+    balance = mortgage_balance
+    total_interest_paid = 0.0
+    for _ in range(12):
+        interest_for_month = balance * monthly_interest_rate
+        principal_for_month = monthly_payment - interest_for_month
+        if principal_for_month < 0:
+            principal_for_month = 0
+            interest_for_month = monthly_payment
+        if principal_for_month > balance:
+            principal_for_month = balance
+        balance -= principal_for_month
+        total_interest_paid += interest_for_month
+
+    # 4) Compute Net Operating Income (NOI)
+    net_operating_income = gross_annual_rent - annual_property_tax - annual_maintenance - total_interest_paid
+
+    # 5) Calculate depreciation and taxable income
+    taxable_income = net_operating_income - annual_depreciation
+    if taxable_income < 0:
+        taxable_income = 0.0
+
+    # 6) Rental income tax and net cash flow
+    rental_income_tax = taxable_income * rental_income_tax_rate
+    net_rental_cash_flow = net_operating_income - rental_income_tax
+
+    return {
+        "Gross Annual Rent": gross_annual_rent,
+        "Property Tax": annual_property_tax,
+        "Maintenance": annual_maintenance,
+        "Total Mortgage Interest": total_interest_paid,
+        "Net Operating Income": net_operating_income,
+        "Depreciation": annual_depreciation,
+        "Taxable Income": taxable_income,
+        "Rental Income Tax": rental_income_tax,
+        "Net Rental Cash Flow": net_rental_cash_flow
+    }
+
+# -----------------------------------------------
 # Stock Update (1 year)
 # -----------------------------------------------
 def simulate_stock(
     current_stock_value,
     stock_annual_contribution,
     expected_return,
-    volatility,
+    stock_volatility,
     cap_gains_tax_rate,
     dividend_yield,
     dividend_tax_rate,
@@ -140,7 +218,7 @@ def simulate_stock(
     dividends_after_tax = dividends * (1 - dividend_tax_rate)
     current_stock_value += dividends_after_tax
 
-    annual_return = np.random.normal(loc=expected_return, scale=volatility)
+    annual_return = np.random.normal(loc=expected_return, scale=stock_volatility)
     current_stock_value *= (1 + annual_return)
 
     if current_stock_value < 0:
@@ -376,12 +454,17 @@ def run_simulation(
     primary_appreciation_std,
     luxury_expenses,
     inflation_rate=0.03,
-    healthcare_inflation=0.05
+    healthcare_inflation=0.05,
+    random_seed=None
 ):
     """
     Enhanced simulation including Social Security, healthcare, and simulation of
     tax-advantaged accounts.
     """
+    # Set random seed if provided for reproducibility
+    if random_seed is not None:
+        np.random.seed(random_seed)
+    
     current_year = date.today().year
     current_age = current_year - birth_year
     years_to_retirement = retirement_age - current_age
@@ -811,7 +894,7 @@ def generate_html_report(results, params, figures, monthly_expenses, ss_analysis
     return html
 
 # -----------------------------------------------
-# Streamlit App
+# STREAMLIT APP
 # -----------------------------------------------
 def main():
     st.set_page_config(page_title="Retirement Portfolio Simulator", layout="wide")
@@ -980,6 +1063,13 @@ def main():
     st.sidebar.header("7️⃣ Simulation Settings")
     n_sims = st.sidebar.number_input("Number of Simulations", 100, 2000, 200, help="More simulations = more accurate results but slower")
     
+    # Optional random seed for reproducibility
+    seed_input = st.sidebar.text_input("Random Seed (Optional)", value="", help="Enter an integer to seed the random number generator for reproducible results.")
+    if seed_input:
+         random_seed = int(seed_input)
+    else:
+         random_seed = None
+    
     st.sidebar.warning("""
     ⚠️ **Important Notes:**
     - Past performance doesn't guarantee future returns
@@ -1050,7 +1140,8 @@ def main():
                 primary_appreciation_std,
                 luxury_expenses,
                 inflation_rate,
-                healthcare_inflation=0.05
+                healthcare_inflation=0.05,
+                random_seed=random_seed
             )
         st.success("Simulation Complete!")
         failure_rate = results["failure_rate"]
@@ -1315,23 +1406,52 @@ def main():
             }))
 
         if num_rentals > 0:
-            st.subheader("Rental Properties Summary")
+            st.subheader("Rental Properties Summary (Detailed Cash Flow)")
             rental_summary = []
             for i, rental in enumerate(rentals_data):
+                # For currently owned rentals (purchase_year == 0), calculate the cash flow breakdown.
+                if rental['purchase_year'] == 0:
+                    breakdown = calculate_rental_cashflow_breakdown(rental, year_index=0)
+                else:
+                    # For future purchases, the detailed cash flow is not available yet.
+                    breakdown = {
+                        "Gross Annual Rent": None, "Property Tax": None, "Maintenance": None,
+                        "Total Mortgage Interest": None, "Net Operating Income": None,
+                        "Depreciation": None, "Taxable Income": None, "Rental Income Tax": None,
+                        "Net Rental Cash Flow": None
+                    }
                 rental_summary.append({
                     'Description': rental['description'],
                     'Purchase Year': rental['purchase_year'],
                     'Current Value': rental['property_value'],
                     'Mortgage Balance': rental['mortgage_balance'],
                     'Monthly Rent': rental['monthly_rent_base'],
+                    'Gross Annual Rent': breakdown["Gross Annual Rent"],
+                    'Property Tax': breakdown["Property Tax"],
+                    'Maintenance': breakdown["Maintenance"],
+                    'Total Mortgage Interest': breakdown["Total Mortgage Interest"],
+                    'NOI': breakdown["Net Operating Income"],
+                    'Depreciation': breakdown["Depreciation"],
+                    'Taxable Income': breakdown["Taxable Income"],
+                    'Rental Income Tax': breakdown["Rental Income Tax"],
+                    'Net Rental Cash Flow': breakdown["Net Rental Cash Flow"],
                     'Planned Sale': f"Year {rental['sale_year']}" if rental['sale_year'] > 0 else "No plan"
                 })
             rental_df = pd.DataFrame(rental_summary)
             st.dataframe(rental_df.style.format({
-                'Current Value': '${:,.2f}',
-                'Mortgage Balance': '${:,.2f}',
-                'Monthly Rent': '${:,.2f}'
+                'Current Value': safe_formatter('${:,.2f}'),
+                'Mortgage Balance': safe_formatter('${:,.2f}'),
+                'Monthly Rent': safe_formatter('${:,.2f}'),
+                'Gross Annual Rent': safe_formatter('${:,.2f}'),
+                'Property Tax': safe_formatter('${:,.2f}'),
+                'Maintenance': safe_formatter('${:,.2f}'),
+                'Total Mortgage Interest': safe_formatter('${:,.2f}'),
+                'NOI': safe_formatter('${:,.2f}'),
+                'Depreciation': safe_formatter('${:,.2f}'),
+                'Taxable Income': safe_formatter('${:,.2f}'),
+                'Rental Income Tax': safe_formatter('${:,.2f}'),
+                'Net Rental Cash Flow': safe_formatter('${:,.2f}')
             }))
-
+    
 if __name__ == "__main__":
     main()
